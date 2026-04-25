@@ -403,18 +403,39 @@ function pTabsSendMessage(tabId, message) {
     }
   });
 }
-function pTabsSendMessageResult(tabId, message) {
+function pTabsSendMessageResult(tabId, message, timeoutMs = 0) {
   return new Promise((resolve) => {
+    let settled = false;
+    let timer = null;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) {
+        try { clearTimeout(timer); } catch (_) {}
+        timer = null;
+      }
+      resolve(value);
+    };
+    const timeout = Number(timeoutMs) || 0;
+    if (timeout > 0) {
+      timer = setTimeout(() => {
+        finish({ ok: false, message: '새 채팅 탭 전송 응답 시간이 초과되었습니다.' });
+      }, Math.max(1000, timeout));
+    }
     try {
       chrome.tabs.sendMessage(tabId, message, (response) => {
         if (chrome.runtime.lastError) {
-          resolve({ ok: false, message: chrome.runtime.lastError.message || '탭 메시지 전송 실패' });
+          finish({ ok: false, message: chrome.runtime.lastError.message || '탭 메시지 전송 실패' });
           return;
         }
-        resolve(response || { ok: true });
+        if (!response) {
+          finish({ ok: false, message: '탭에서 전송 결과를 받지 못했습니다.' });
+          return;
+        }
+        finish(response);
       });
     } catch (_) {
-      resolve({ ok: false, message: '탭 메시지 전송 실패' });
+      finish({ ok: false, message: '탭 메시지 전송 실패' });
     }
   });
 }
@@ -633,17 +654,19 @@ async function enqueuePromptInNewChatTab(tab, text) {
   if (!ready) {
     return { ok: false, tabId: tab.id, message: '새 채팅 탭 준비 시간 초과' };
   }
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     const response = await pTabsSendMessageResult(tab.id, {
-      action: 'enqueue_steering_prompt',
+      action: 'send_steering_prompt_now',
       text,
-      autoSendDelayMs: 1600,
+      timeoutMs: 45000,
+      submitStartTimeoutMs: 2500,
       source: 'new_chat_tab',
-    });
-    if (response?.ok) return { ok: true, tabId: tab.id };
-    await sleep(500 + attempt * 250);
+    }, 52000);
+    if (response?.ok && response?.sent !== false) return { ok: true, tabId: tab.id };
+    if (attempt === 0) await sleep(900);
+    else return { ok: false, tabId: tab.id, message: response?.message || '새 채팅 탭에 문구를 전송하지 못했습니다.' };
   }
-  return { ok: false, tabId: tab.id, message: '새 채팅 탭에 문구를 넣지 못했습니다.' };
+  return { ok: false, tabId: tab.id, message: '새 채팅 탭에 문구를 전송하지 못했습니다.' };
 }
 async function openChatGptNewChatTabsForPrompt(message, sender) {
   const text = String(message?.text || '').trim();

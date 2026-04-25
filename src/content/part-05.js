@@ -1,10 +1,10 @@
-async function tryTriggerComposerSend(composer, trigger) {
+async function tryTriggerComposerSend(composer, trigger, options = {}) {
   if (!composer || typeof trigger !== 'function') return false;
   const beforeText = getCurrentComposerText(composer);
   let triggered = false;
   try { triggered = trigger() !== false; } catch (_) { triggered = false; }
   if (!triggered) return false;
-  return await waitForSubmissionStart(composer, beforeText);
+  return await waitForSubmissionStart(composer, beforeText, options.submitStartTimeoutMs || options.timeoutMs || 900);
 }
 function setSteeringStatus(text, isError = false) {
   if (!steeringRefs?.status) return;

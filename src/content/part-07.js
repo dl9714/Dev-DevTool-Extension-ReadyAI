@@ -201,12 +201,83 @@ async function sendSteeringPromptText(text, options = {}) {
     () => dispatchSubmitKey(composer, { metaKey: true }),
   ];
   for (const attempt of attempts) {
-    const sent = await tryTriggerComposerSend(composer, attempt);
+    const sent = await tryTriggerComposerSend(composer, attempt, { submitStartTimeoutMs: options.submitStartTimeoutMs });
     if (sent) {
       return { ok: true, sent: true, message: '전송했습니다.' };
     }
   }
   return { ok: false, sent: false, message: '전송 경로를 모두 시도했지만 전송하지 못했습니다.' };
+}
+function hasLikelySteeringSubmissionStarted() {
+  try {
+    if (activeSite && detectGenerating(activeSite)) return true;
+  } catch (_) {}
+  const composer = getActiveComposer();
+  if (!composer) return false;
+  try {
+    return !String(getCurrentComposerText(composer) || '').trim();
+  } catch (_) {
+    return false;
+  }
+}
+function finalizeDirectSteeringSend(source) {
+  clearSteeringCompletionOffer();
+  if (monitoring) {
+    steeringAwaitingTurnCompletion = true;
+    steeringObservedGenerationSinceSend = false;
+    armSteeringAwaitingResponseStart();
+    armSteeringSendLock();
+  } else {
+    clearSteeringTurnCompletionWait();
+    clearSteeringAwaitingResponseStart();
+    clearSteeringSendLock();
+  }
+  setSteeringStatus(source === 'new_chat_tab' ? '새 채팅에 전송했습니다.' : '전송했습니다.');
+  setSteeringDraftText('');
+  try { if (steeringRefs?.input) steeringRefs.input.value = ''; } catch (_) {}
+  updateSteeringUi();
+  return { ok: true, sent: true, message: '전송했습니다.' };
+}
+async function sendSteeringPromptTextWhenReady(text, options = {}) {
+  const value = String(text || '').trim();
+  if (!value) return { ok: false, sent: false, message: '보낼 내용이 없습니다.' };
+  const timeoutMs = Math.max(5000, Number(options.timeoutMs) || 45000);
+  const deadline = Date.now() + timeoutMs;
+  let attempt = 0;
+  let lastMessage = '';
+  while (Date.now() <= deadline) {
+    if (!steeringEnabled) {
+      return { ok: false, sent: false, message: '후속 지시 기능이 꺼져 있습니다.' };
+    }
+    try { maybeRescanShadowRoots(); } catch (_) {}
+    if (monitoring && !canAutoSendSteeringNow()) {
+      lastMessage = '전송 가능 상태를 기다리는 중입니다.';
+    } else {
+      const result = await sendSteeringPromptText(value, {
+        images: [],
+        submitStartTimeoutMs: Math.max(900, Number(options.submitStartTimeoutMs) || 2500),
+      });
+      lastMessage = result?.message || '';
+      if (result?.ok && result?.sent) {
+        return finalizeDirectSteeringSend(options.source);
+      }
+      if (/전송 경로/.test(lastMessage)) {
+        await waitForSteeringTick(700);
+        if (hasLikelySteeringSubmissionStarted()) {
+          return finalizeDirectSteeringSend(options.source);
+        }
+      }
+    }
+    attempt += 1;
+    const delay = Math.min(2200, 350 + attempt * 180);
+    await waitForSteeringTick(delay);
+  }
+  return {
+    ok: false,
+    sent: false,
+    retryable: true,
+    message: lastMessage || '새 채팅 탭 전송 준비 시간이 초과되었습니다.',
+  };
 }
 async function processSteeringQueue(options = {}) {
   if (!monitoring || !steeringEnabled) return false;

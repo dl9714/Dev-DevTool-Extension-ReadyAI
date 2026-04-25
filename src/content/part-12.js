@@ -230,6 +230,25 @@ try {
       try { sendResponse?.({ ok: true }); } catch (_) {}
       return;
     }
+    if (msg.action === 'send_steering_prompt_now') {
+      const text = String(msg.text || '').trim();
+      if (!text) {
+        try { sendResponse?.({ ok: false, sent: false, message: '내용이 비어 있습니다.' }); } catch (_) {}
+        return;
+      }
+      Promise.resolve(sendSteeringPromptTextWhenReady(text, {
+        timeoutMs: msg.timeoutMs,
+        submitStartTimeoutMs: msg.submitStartTimeoutMs,
+        source: msg.source || '',
+      }))
+        .then((result) => {
+          try { sendResponse?.(result || { ok: false, sent: false, message: '전송하지 못했습니다.' }); } catch (_) {}
+        })
+        .catch(() => {
+          try { sendResponse?.({ ok: false, sent: false, message: '새 채팅 탭 전송 중 오류가 발생했습니다.' }); } catch (_) {}
+        });
+      return true;
+    }
     if (msg.action === 'enqueue_steering_prompt') {
       const text = String(msg.text || '').trim();
       if (!text) {
