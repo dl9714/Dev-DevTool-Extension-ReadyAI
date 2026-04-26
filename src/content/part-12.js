@@ -208,8 +208,9 @@ console.log('[Ready_Ai] content script loaded');
 try {
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg) return;
+    if (msg.topFrameOnly && !IS_TOP_FRAME) return;
     if (msg.action === 'ping') {
-      try { sendResponse?.({ ok: true }); } catch (_) {}
+      try { sendResponse?.({ ok: true, readyAiContentVersion: READY_AI_CONTENT_VERSION }); } catch (_) {}
       return;
     }
     if (msg.action === 'force_check') {
@@ -240,6 +241,7 @@ try {
         timeoutMs: msg.timeoutMs,
         submitStartTimeoutMs: msg.submitStartTimeoutMs,
         source: msg.source || '',
+        skipReadinessGate: !!msg.skipReadinessGate,
       }))
         .then((result) => {
           try { sendResponse?.(result || { ok: false, sent: false, message: '전송하지 못했습니다.' }); } catch (_) {}

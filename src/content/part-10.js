@@ -73,7 +73,7 @@ var STEERING_UI_MARKUP_TEMPLATE = `
           <div class="advanced-body" id="ready-ai-steering-advanced-body">
             <div class="advanced-field-row">
               <label for="ready-ai-steering-new-chat-count">새 채팅 탭 수</label>
-              <input id="ready-ai-steering-new-chat-count" type="number" min="1" max="8" step="1" value="3" inputmode="numeric" />
+              <input id="ready-ai-steering-new-chat-count" type="text" inputmode="numeric" pattern="[1-8]" autocomplete="off" value="3" />
               <button class="advanced-btn" type="button" id="ready-ai-steering-new-chat-send">새 채팅으로 보내기</button>
             </div>
             <div class="advanced-hint">기본 Enter도 고급설정 ON에서는 현재 대화가 아니라 새 채팅 탭으로 보냅니다. 이미지는 현재 대화 전송만 지원합니다.</div>
@@ -121,6 +121,15 @@ function reuseExistingSteeringUi() {
   return steeringRefs;
 }
 function createSteeringUiHost() {
+  try {
+    const staleHost = document.getElementById('ready-ai-steering-host');
+    if (staleHost && staleHost !== steeringHost) {
+      const staleInput = staleHost.shadowRoot?.getElementById?.('ready-ai-steering-input');
+      const staleDraft = String(staleInput?.value || '').trim();
+      if (staleDraft && !String(steeringDraftText || '').trim()) setSteeringDraftText(staleInput.value || '');
+      staleHost.remove();
+    }
+  } catch (_) {}
   steeringHost = document.createElement('div');
   steeringHost.id = 'ready-ai-steering-host';
   steeringHost.style.position = 'fixed';
@@ -245,14 +254,114 @@ function bindSteeringUiEvents() {
   steeringRefs.advancedToggle?.addEventListener('change', consume(() => {
     setSteeringAdvancedEnabled(!!steeringRefs.advancedToggle.checked);
   }));
+  const getSingleNewChatCountDigit = (value) => {
+    const digits = String(value || '').replace(/[^\d]/g, '');
+    const validDigits = digits.split('').filter((digit) => /^[1-8]$/.test(digit));
+    return validDigits.length ? validDigits[validDigits.length - 1] : '';
+  };
+  const commitNewChatCountDigit = (digit, options = {}) => {
+    const normalized = getSingleNewChatCountDigit(digit);
+    if (!normalized) return false;
+    try { steeringRefs.newChatCount.value = normalized; } catch (_) {}
+    setSteeringNewChatTabCountValue(normalized, {
+      render: false,
+      syncInput: false,
+      silentStatus: options.silentStatus !== false,
+    });
+    if (options.silentStatus === false) setSteeringStatus(`새 채팅 탭 수: ${normalized}`);
+    return true;
+  };
+  const syncNewChatCountInput = (options = {}) => {
+    const raw = String(steeringRefs.newChatCount?.value || '').trim();
+    if (!raw) {
+      setSteeringNewChatTabCountValue('', {
+        allowEmpty: true,
+        render: false,
+        syncInput: false,
+        silentStatus: true,
+      });
+      return false;
+    }
+    const normalized = getSingleNewChatCountDigit(raw);
+    if (!normalized) {
+      try { steeringRefs.newChatCount.value = ''; } catch (_) {}
+      setSteeringNewChatTabCountValue('', {
+        allowEmpty: true,
+        render: false,
+        syncInput: false,
+        silentStatus: true,
+      });
+      return false;
+    }
+    if (raw !== normalized) {
+      try { steeringRefs.newChatCount.value = normalized; } catch (_) {}
+      setSteeringStatus(`새 채팅 탭 수: ${normalized}`);
+    }
+    setSteeringNewChatTabCountValue(normalized, {
+      render: false,
+      syncInput: false,
+      silentStatus: options.silentStatus !== false,
+    });
+    return true;
+  };
+  try { clearInterval(window.__readyAiNewChatCountSanitizeTimer); } catch (_) {}
+  try {
+    window.__readyAiNewChatCountSanitizeTimer = setInterval(() => {
+      if (steeringRoot?.activeElement !== steeringRefs.newChatCount) return;
+      syncNewChatCountInput();
+    }, 200);
+  } catch (_) {}
   steeringRefs.newChatCount?.addEventListener('change', consume(() => {
-    setSteeringNewChatTabCountValue(steeringRefs.newChatCount.value);
+    if (!syncNewChatCountInput({ silentStatus: false })) setSteeringNewChatTabCountValue(steeringRefs.newChatCount.value);
   }));
+  steeringRefs.newChatCount?.addEventListener('input', (event) => {
+    try { event.stopPropagation(); } catch (_) {}
+    syncNewChatCountInput({ silentStatus: false });
+  });
   steeringRefs.newChatCount?.addEventListener('keydown', (event) => {
     try { event.stopPropagation(); } catch (_) {}
-    if (event.isComposing || event.key !== 'Enter') return;
-    try { event.preventDefault(); } catch (_) {}
-    setSteeringNewChatTabCountValue(steeringRefs.newChatCount.value);
+    if (event.isComposing) return;
+    const key = String(event.key || '');
+    if (/^[1-8]$/.test(key)) {
+      try { event.preventDefault(); } catch (_) {}
+      commitNewChatCountDigit(key, { silentStatus: false });
+      return;
+    }
+    if (key === 'Backspace' || key === 'Delete') {
+      try { event.preventDefault(); } catch (_) {}
+      try { steeringRefs.newChatCount.value = ''; } catch (_) {}
+      setSteeringNewChatTabCountValue('', {
+        allowEmpty: true,
+        render: false,
+        syncInput: false,
+        silentStatus: true,
+      });
+      return;
+    }
+    if (key === 'ArrowUp' || key === 'ArrowDown') {
+      try { event.preventDefault(); } catch (_) {}
+      const base = normalizeSteeringNewChatTabCount(steeringRefs.newChatCount.value || steeringNewChatTabCount);
+      const next = Math.max(1, Math.min(8, base + (key === 'ArrowUp' ? 1 : -1)));
+      commitNewChatCountDigit(String(next), { silentStatus: false });
+      return;
+    }
+    if (key === 'Enter') {
+      try { event.preventDefault(); } catch (_) {}
+      if (!syncNewChatCountInput({ silentStatus: false })) commitNewChatCountDigit(String(steeringNewChatTabCount), { silentStatus: false });
+      return;
+    }
+    if (key === 'Escape') {
+      try { event.preventDefault(); } catch (_) {}
+      commitNewChatCountDigit(String(steeringNewChatTabCount));
+      return;
+    }
+    if (key.length === 1) {
+      try { event.preventDefault(); } catch (_) {}
+    }
+  });
+  steeringRefs.newChatCount?.addEventListener('keyup', (event) => {
+    try { event.stopPropagation(); } catch (_) {}
+    syncNewChatCountInput();
   });
   steeringRefs.newChatSend?.addEventListener('click', consume(() => {
     submitSteeringInputToNewChats();

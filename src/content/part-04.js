@@ -4,6 +4,9 @@ function findVisibleActionButton(selectors) {
     const candidates = qsa(selector);
     for (const el of candidates) {
       if (!el || !isVisible(el) || !isEnabledButtonLike(el)) continue;
+      try {
+        if (typeof isSteeringTargetNode === 'function' && isSteeringTargetNode(el)) continue;
+      } catch (_) {}
       const aria = (el.getAttribute?.('aria-label') || '').trim();
       const title = (el.getAttribute?.('title') || '').trim();
       const tooltip = (el.getAttribute?.('mattooltip') || '').trim();
@@ -73,6 +76,7 @@ function getSendButtonSelectors(siteKey) {
       'button[aria-label*="Send message"]',
       'button[aria-label*="Send"]',
       'button[aria-label*="전송"]',
+      'button[aria-label*="보내기"]',
       'form button[type="submit"]',
     ];
   }
@@ -81,8 +85,10 @@ function getSendButtonSelectors(siteKey) {
       'button[aria-label*="Send"]',
       'button[aria-label*="send"]',
       'button[aria-label*="전송"]',
+      'button[aria-label*="보내기"]',
       'button[mattooltip*="Send"]',
       'button[mattooltip*="전송"]',
+      'button[mattooltip*="보내기"]',
       'form button[type="submit"]',
     ];
   }
@@ -98,6 +104,7 @@ function getSendButtonSelectors(siteKey) {
     'button[aria-label*="Send"]',
     'button[aria-label*="send"]',
     'button[aria-label*="전송"]',
+    'button[aria-label*="보내기"]',
     'form button[type="submit"]',
     'button[type="submit"]',
   ];
@@ -117,6 +124,9 @@ function getComposerSubmitForm(composer) {
 }
 function scoreSendButtonCandidate(el, composer) {
   if (!el || !isVisible(el) || !isEnabledButtonLike(el)) return -999;
+  try {
+    if (typeof isSteeringTargetNode === 'function' && isSteeringTargetNode(el)) return -999;
+  } catch (_) {}
   const aria = (el.getAttribute?.('aria-label') || '').trim();
   const title = (el.getAttribute?.('title') || '').trim();
   const testId = (el.getAttribute?.('data-testid') || '').trim();
@@ -127,7 +137,7 @@ function scoreSendButtonCandidate(el, composer) {
   if (/(stop|중지|cancel|abort|voice|mic|upload|첨부|attachment|tool|menu|옵션|옵션열기|plus|더보기)/i.test(hay)) return -999;
   let score = 0;
   if (el.getAttribute?.('type') === 'submit') score += 7;
-  if (/send|전송|submit|arrow-up|paper-plane/i.test(hay)) score += 6;
+  if (/send|전송|보내기|submit|arrow-up|paper-plane/i.test(hay)) score += 6;
   if (/send/i.test(testId)) score += 5;
   const form = getComposerSubmitForm(composer);
   if (form && form.contains(el)) score += 3;
@@ -146,6 +156,9 @@ function scoreSendButtonCandidate(el, composer) {
 }
 function scoreAnySendButtonCandidate(el, composer) {
   if (!el || !isVisible(el)) return -999;
+  try {
+    if (typeof isSteeringTargetNode === 'function' && isSteeringTargetNode(el)) return -999;
+  } catch (_) {}
   const aria = (el.getAttribute?.('aria-label') || '').trim();
   const title = (el.getAttribute?.('title') || '').trim();
   const testId = (el.getAttribute?.('data-testid') || '').trim();
@@ -156,7 +169,7 @@ function scoreAnySendButtonCandidate(el, composer) {
   if (/(stop|중지|cancel|abort|voice|mic|upload|첨부|attachment|tool|menu|옵션|옵션열기|plus|더보기)/i.test(hay)) return -999;
   let score = 0;
   if (el.getAttribute?.('type') === 'submit') score += 7;
-  if (/send|전송|submit|arrow-up|paper-plane/i.test(hay)) score += 6;
+  if (/send|전송|보내기|submit|arrow-up|paper-plane/i.test(hay)) score += 6;
   if (/send/i.test(testId)) score += 5;
   const form = getComposerSubmitForm(composer);
   if (form && form.contains(el)) score += 3;
@@ -211,9 +224,12 @@ function findNearbySendButtonAnyState(composer) {
   }
   return bestScore >= 4 ? best : null;
 }
-function dispatchTextEvents(el) {
+function dispatchTextEvents(el, value = '') {
   if (!el) return;
-  const inputEventInit = { bubbles: true, cancelable: true, data: null, inputType: 'insertText' };
+  const data = String(value || '');
+  const beforeInputInit = { bubbles: true, cancelable: true, data, inputType: 'insertReplacementText' };
+  try { el.dispatchEvent(new InputEvent('beforeinput', beforeInputInit)); } catch (_) {}
+  const inputEventInit = { bubbles: true, cancelable: true, data, inputType: 'insertText' };
   try { el.dispatchEvent(new InputEvent('input', inputEventInit)); } catch (_) {
     try { el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true })); } catch (_) {}
   }
@@ -265,7 +281,7 @@ function setControlValue(el, value) {
       const setter = proto && Object.getOwnPropertyDescriptor(proto, 'value')?.set;
       if (setter) setter.call(el, nextValue);
       else el.value = nextValue;
-      dispatchTextEvents(el);
+      dispatchTextEvents(el, nextValue);
       try {
         const len = nextValue.length;
         if (typeof el.setSelectionRange === 'function') el.setSelectionRange(len, len);
@@ -278,22 +294,20 @@ function setControlValue(el, value) {
       const selection = window.getSelection?.();
       const range = document.createRange();
       range.selectNodeContents(el);
-      range.collapse(false);
       selection?.removeAllRanges?.();
       selection?.addRange?.(range);
-      try { document.execCommand('selectAll', false, null); } catch (_) {}
       const inserted = document.execCommand('insertText', false, nextValue);
       if (!inserted || String(el.innerText || '').trim() !== nextValue.trim()) {
         el.textContent = '';
         const textNode = document.createTextNode(nextValue);
         el.appendChild(textNode);
       }
-      dispatchTextEvents(el);
+      dispatchTextEvents(el, nextValue);
       return true;
     } catch (_) {
       try {
         el.textContent = nextValue;
-        dispatchTextEvents(el);
+        dispatchTextEvents(el, nextValue);
         return true;
       } catch (_) {}
     }
@@ -303,15 +317,23 @@ function setControlValue(el, value) {
 function waitForSteeringTick(ms = 80) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 }
-async function waitForSubmissionStart(composer, beforeText, timeout = 900) {
+async function waitForSubmissionStart(composer, beforeText, timeout = 900, options = {}) {
   const baseline = String(beforeText || '').trim();
+  const hadConversationTurns = !!options.hadConversationTurns;
+  const beforeUrl = String(options.beforeUrl || location.href || '');
   const deadline = Date.now() + Math.max(120, timeout);
   while (Date.now() <= deadline) {
     try { maybeRescanShadowRoots(); } catch (_) {}
     const current = String(getCurrentComposerText(composer) || '').trim();
-    if (!current || current !== baseline) return true;
+    if (!current && baseline) return true;
     try {
       if (activeSite && detectGenerating(activeSite)) return true;
+    } catch (_) {}
+    try {
+      if (!hadConversationTurns && typeof hasChatGptConversationTurns === 'function' && hasChatGptConversationTurns()) return true;
+    } catch (_) {}
+    try {
+      if (beforeUrl && location.href !== beforeUrl && !current) return true;
     } catch (_) {}
     await waitForSteeringTick(70);
   }

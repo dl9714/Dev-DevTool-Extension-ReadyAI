@@ -217,13 +217,19 @@ function setSteeringAdvancedEnabled(nextValue) {
   setSteeringStatus(steeringAdvancedEnabled ? '고급설정 ON · 새 채팅 전송 모드' : '고급설정 OFF · 현재 대화 후속 지시 모드');
   updateSteeringUi();
 }
-function setSteeringNewChatTabCountValue(value) {
-  steeringNewChatTabCount = normalizeSteeringNewChatTabCount(value);
+function setSteeringNewChatTabCountValue(value, options = {}) {
+  const raw = String(value ?? '').trim();
+  if (!raw && options.allowEmpty) return false;
+  steeringNewChatTabCount = normalizeSteeringNewChatTabCount(raw || value);
+  if (options.syncInput !== false && steeringRefs?.newChatCount && steeringRefs.newChatCount.value !== String(steeringNewChatTabCount)) {
+    try { steeringRefs.newChatCount.value = String(steeringNewChatTabCount); } catch (_) {}
+  }
   try {
     chrome.storage.local.set({ [STEERING_STORAGE_KEYS.NEW_CHAT_TAB_COUNT]: steeringNewChatTabCount });
   } catch (_) {}
-  setSteeringStatus(`새 채팅 탭 수: ${steeringNewChatTabCount}`);
-  updateSteeringUi();
+  if (!options.silentStatus) setSteeringStatus(`새 채팅 탭 수: ${steeringNewChatTabCount}`);
+  if (options.render !== false) updateSteeringUi();
+  return true;
 }
 function applySteeringTheme() {
   if (!steeringHost || !steeringRoot) return;
@@ -334,6 +340,9 @@ function findVisibleEditable(selectors) {
     const candidates = qsa(selector);
     for (const el of candidates) {
       if (!el || !isVisible(el)) continue;
+      try {
+        if (typeof isSteeringTargetNode === 'function' && isSteeringTargetNode(el)) continue;
+      } catch (_) {}
       if (el.disabled === true || el.readOnly === true) continue;
       if (el.getAttribute?.('aria-hidden') === 'true') continue;
       return el;

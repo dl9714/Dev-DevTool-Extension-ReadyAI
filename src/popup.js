@@ -241,7 +241,8 @@ function applyQuickPreset(cfg, preset) {
   const mode = String(preset || '').trim();
   if (mode === 'focus') {
     cfg.dndMode = false;
-    cfg.badgeEnabled = true;
+    cfg.badgeEnabled = false;
+    cfg.badgeCountEnabled = false;
     cfg.individualCompletionNotificationEnabled = true;
     cfg.batchCompletionNotificationEnabled = true;
     cfg.individualCompletionSound = SOUND_PRESETS.soft;
@@ -254,7 +255,8 @@ function applyQuickPreset(cfg, preset) {
     cfg.quietHoursEnd = '08:00';
   } else if (mode === 'loud') {
     cfg.dndMode = false;
-    cfg.badgeEnabled = true;
+    cfg.badgeEnabled = false;
+    cfg.badgeCountEnabled = false;
     cfg.individualCompletionNotificationEnabled = true;
     cfg.batchCompletionNotificationEnabled = true;
     cfg.individualCompletionSound = SOUND_PRESETS.double;
@@ -265,7 +267,8 @@ function applyQuickPreset(cfg, preset) {
     cfg.quietHoursEnabled = false;
   } else {
     cfg.dndMode = false;
-    cfg.badgeEnabled = true;
+    cfg.badgeEnabled = false;
+    cfg.badgeCountEnabled = false;
     cfg.individualCompletionNotificationEnabled = true;
     cfg.batchCompletionNotificationEnabled = true;
     cfg.individualCompletionSound = SOUND_PRESETS.soft;
@@ -297,8 +300,8 @@ function buildConfigStoragePayload(cfg) {
   const { enabledKey, customKey } = getSitesStorageKeys();
   return {
     dndMode: !!cfg.dndMode,
-    badgeEnabled: !!cfg.badgeEnabled,
-    badgeCountEnabled: !!cfg.badgeCountEnabled,
+    badgeEnabled: false,
+    badgeCountEnabled: false,
     titleBadgeEnabled: !!cfg.titleBadgeEnabled,
     titleBadgeCountEnabled: !!cfg.titleBadgeCountEnabled,
     completionHistoryEnabled: !!cfg.completionHistoryEnabled,
@@ -447,8 +450,8 @@ function loadConfig(cb) {
       : (res?.[customKey] || []);
     cb({
       dndMode: !!res.dndMode,
-      badgeEnabled: (typeof res.badgeEnabled === 'boolean') ? res.badgeEnabled : true,
-      badgeCountEnabled: (typeof res.badgeCountEnabled === 'boolean') ? res.badgeCountEnabled : true,
+      badgeEnabled: false,
+      badgeCountEnabled: false,
       titleBadgeEnabled: (typeof res.titleBadgeEnabled === 'boolean') ? res.titleBadgeEnabled : true,
       titleBadgeCountEnabled: (typeof res.titleBadgeCountEnabled === 'boolean') ? res.titleBadgeCountEnabled : true,
       completionHistoryEnabled: (typeof res.completionHistoryEnabled === 'boolean') ? res.completionHistoryEnabled : true,
@@ -1111,8 +1114,6 @@ function refreshSummary(cfg) {
     'advanced-steering-close-after-send': !!cfg.steeringCloseAfterSend,
     'advanced-steering-count-visible': !!cfg.steeringQueueCountVisible,
     'advanced-steering-advanced-enabled': !!cfg.steeringAdvancedEnabled,
-    'advanced-badge-enabled': !!cfg.badgeEnabled,
-    'advanced-badge-count-enabled': !!cfg.badgeCountEnabled,
     'advanced-title-badge-enabled': !!cfg.titleBadgeEnabled,
     'advanced-title-badge-count-enabled': !!cfg.titleBadgeCountEnabled,
     'advanced-history-enabled': !!cfg.completionHistoryEnabled,
@@ -1127,7 +1128,6 @@ function refreshSummary(cfg) {
     const parts = [];
     parts.push(cfg.steeringLauncherVisible ? '후속 지시 버튼 표시' : '후속 지시 버튼 숨김');
     parts.push(cfg.steeringAdvancedEnabled ? `고급 새 채팅 ${normalizeSteeringNewChatTabCount(cfg.steeringNewChatTabCount)}탭` : '기본 후속 지시');
-    parts.push(cfg.badgeEnabled ? (cfg.badgeCountEnabled ? '배지 숫자 켜짐' : '배지 숫자 꺼짐') : '배지 꺼짐');
     parts.push(cfg.titleBadgeEnabled ? (cfg.titleBadgeCountEnabled ? '탭 제목 숫자 켜짐' : '탭 제목 숫자 꺼짐') : '탭 제목 표시 꺼짐');
     parts.push(cfg.completionHistoryEnabled ? '완료 이력 저장' : '완료 이력 저장 안 함');
     parts.push(cfg.dashboardAutoRefreshEnabled ? '팝업 자동 새로고침' : '수동 새로고침');
@@ -1845,18 +1845,6 @@ function wireActions(cfg) {
       });
     });
   }
-  const badgeToggle = $('badge-toggle');
-  if (badgeToggle) {
-    badgeToggle.checked = !!cfg.badgeEnabled;
-    badgeToggle.addEventListener('change', () => {
-      cfg.badgeEnabled = !!badgeToggle.checked;
-      if ($('advanced-badge-enabled')) $('advanced-badge-enabled').checked = cfg.badgeEnabled;
-      saveConfig(cfg, () => {
-        refreshSummary(cfg);
-        setHint('저장됨');
-      });
-    });
-  }
   const steeringToggle = $('steering-toggle');
   const steeringTheme = $('steering-theme');
   const steeringAdvancedToggle = $('steering-advanced-toggle');
@@ -1908,6 +1896,47 @@ function wireActions(cfg) {
   }
   if (steeringNewChatCount) {
     steeringNewChatCount.value = String(normalizeSteeringNewChatTabCount(cfg.steeringNewChatTabCount));
+    const getSingleNewChatCountDigit = (value) => {
+      const digits = String(value || '').replace(/[^\d]/g, '');
+      const validDigits = digits.split('').filter((digit) => /^[1-8]$/.test(digit));
+      return validDigits.length ? validDigits[validDigits.length - 1] : '';
+    };
+    const commitNewChatCountDigit = (value) => {
+      const digit = getSingleNewChatCountDigit(value);
+      if (!digit) return false;
+      cfg.steeringNewChatTabCount = normalizeSteeringNewChatTabCount(digit);
+      steeringNewChatCount.value = String(cfg.steeringNewChatTabCount);
+      saveConfig(cfg, () => {
+        refreshSummary(cfg);
+        setHint('저장됨');
+      });
+      return true;
+    };
+    steeringNewChatCount.addEventListener('keydown', (event) => {
+      const key = String(event.key || '');
+      if (/^[1-8]$/.test(key)) {
+        event.preventDefault();
+        commitNewChatCountDigit(key);
+        return;
+      }
+      if (key === 'Backspace' || key === 'Delete') {
+        event.preventDefault();
+        steeringNewChatCount.value = '';
+        return;
+      }
+      if (key === 'ArrowUp' || key === 'ArrowDown') {
+        event.preventDefault();
+        const base = normalizeSteeringNewChatTabCount(steeringNewChatCount.value || cfg.steeringNewChatTabCount);
+        commitNewChatCountDigit(String(Math.max(1, Math.min(8, base + (key === 'ArrowUp' ? 1 : -1)))));
+        return;
+      }
+      if (key.length === 1) event.preventDefault();
+    });
+    steeringNewChatCount.addEventListener('input', () => {
+      const raw = String(steeringNewChatCount.value || '').trim();
+      if (!raw) return;
+      commitNewChatCountDigit(raw);
+    });
     steeringNewChatCount.addEventListener('change', () => {
       cfg.steeringNewChatTabCount = normalizeSteeringNewChatTabCount(steeringNewChatCount.value);
       steeringNewChatCount.value = String(cfg.steeringNewChatTabCount);
@@ -1923,7 +1952,6 @@ function wireActions(cfg) {
     el.checked = !!cfg[key];
     el.addEventListener('change', () => {
       cfg[key] = !!el.checked;
-      if (options.syncMainBadgeToggle && $('badge-toggle')) $('badge-toggle').checked = !!cfg[key];
       if (options.syncMainSteeringToggle && $('steering-toggle')) $('steering-toggle').checked = !!cfg[key];
       if (options.syncQuickSteeringToggle && $('quick-steering-toggle')) $('quick-steering-toggle').checked = !!cfg[key];
       if (options.syncMainSteeringAdvancedToggle && $('steering-advanced-toggle')) $('steering-advanced-toggle').checked = !!cfg[key];
@@ -1944,8 +1972,6 @@ function wireActions(cfg) {
   bindAdvancedToggle('advanced-steering-close-after-send', 'steeringCloseAfterSend');
   bindAdvancedToggle('advanced-steering-count-visible', 'steeringQueueCountVisible');
   bindAdvancedToggle('advanced-steering-advanced-enabled', 'steeringAdvancedEnabled', { syncMainSteeringAdvancedToggle: true });
-  bindAdvancedToggle('advanced-badge-enabled', 'badgeEnabled', { syncMainBadgeToggle: true });
-  bindAdvancedToggle('advanced-badge-count-enabled', 'badgeCountEnabled');
   bindAdvancedToggle('advanced-title-badge-enabled', 'titleBadgeEnabled');
   bindAdvancedToggle('advanced-title-badge-count-enabled', 'titleBadgeCountEnabled');
   bindAdvancedToggle('advanced-history-enabled', 'completionHistoryEnabled');

@@ -60,14 +60,15 @@ function applySteeringUiNow() {
   if (refs.advancedCard) refs.advancedCard.classList.toggle('enabled', !!steeringAdvancedEnabled);
   if (refs.advancedToggle) refs.advancedToggle.checked = !!steeringAdvancedEnabled;
   if (refs.advancedBody) refs.advancedBody.style.display = steeringAdvancedEnabled ? 'flex' : 'none';
-  if (refs.newChatCount && refs.newChatCount.value !== String(steeringNewChatTabCount)) {
+  const newChatCountActive = steeringRoot?.activeElement === refs.newChatCount;
+  if (refs.newChatCount && !newChatCountActive && refs.newChatCount.value !== String(steeringNewChatTabCount)) {
     refs.newChatCount.value = String(steeringNewChatTabCount);
   }
   refs.primary.textContent = getSteeringPrimaryLabel();
   refs.primary.disabled = false;
   const hasDraftText = !!String(refs.input?.value || '').trim();
   const hasDraftImages = getSteeringDraftAttachmentCount() > 0;
-  if (refs.newChatSend) refs.newChatSend.disabled = !steeringAdvancedEnabled || !hasDraftText || hasDraftImages || getSiteKey() !== 'chatgpt';
+  if (refs.newChatSend) refs.newChatSend.disabled = steeringNewChatSendPending || !steeringAdvancedEnabled || !hasDraftText || hasDraftImages;
   if (refs.sendNow) refs.sendNow.disabled = !steeringQueue.length && !hasDraftText && !hasDraftImages;
   if (refs.clear) refs.clear.disabled = !steeringQueue.length && !hasDraftText && !hasDraftImages;
   if (refs.runNext) refs.runNext.disabled = !steeringQueue.length;

@@ -1,10 +1,18 @@
 async function tryTriggerComposerSend(composer, trigger, options = {}) {
   if (!composer || typeof trigger !== 'function') return false;
   const beforeText = getCurrentComposerText(composer);
+  let hadConversationTurns = false;
+  try {
+    hadConversationTurns = typeof hasChatGptConversationTurns === 'function' && hasChatGptConversationTurns();
+  } catch (_) {}
+  const beforeUrl = String(location.href || '');
   let triggered = false;
   try { triggered = trigger() !== false; } catch (_) { triggered = false; }
   if (!triggered) return false;
-  return await waitForSubmissionStart(composer, beforeText, options.submitStartTimeoutMs || options.timeoutMs || 900);
+  return await waitForSubmissionStart(composer, beforeText, options.submitStartTimeoutMs || options.timeoutMs || 900, {
+    hadConversationTurns,
+    beforeUrl,
+  });
 }
 function setSteeringStatus(text, isError = false) {
   if (!steeringRefs?.status) return;

@@ -573,5 +573,141 @@ var STEERING_UI_STYLE_TEMPLATE_B = `
       .file-input {
         display: none;
       }
+      .launcher {
+        border-color: rgba(148, 163, 184, 0.3);
+        background: rgba(15, 23, 42, 0.96);
+        box-shadow: 0 16px 34px rgba(2, 6, 23, 0.34);
+      }
+      .launcher-count {
+        background: rgba(30, 41, 59, 0.82);
+      }
+      .card,
+      .queue-wrap,
+      .title-edit-card,
+      .template-wrap,
+      .advanced-card,
+      .attachment-wrap,
+      .attachment-preview-card {
+        border-radius: 8px;
+      }
+      .card {
+        border-color: rgba(100, 116, 139, 0.42);
+        background: rgba(15, 23, 42, 0.98);
+        box-shadow: 0 22px 54px rgba(2, 6, 23, 0.5);
+      }
+      .top {
+        padding-bottom: 10px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+      }
+      .title {
+        letter-spacing: 0;
+      }
+      .input,
+      .title-input,
+      .queue-edit-input,
+      .advanced-field-row input {
+        border-radius: 8px;
+        border-color: rgba(148, 163, 184, 0.3);
+        background: rgba(2, 6, 23, 0.42);
+      }
+      .input:focus,
+      .title-input:focus,
+      .queue-edit-input:focus,
+      .advanced-field-row input:focus {
+        border-color: rgba(37, 99, 235, 0.62);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+      }
+      .btn,
+      .title-btn,
+      .advanced-btn,
+      .queue-head-btn,
+      .attachment-btn,
+      .template-btn {
+        border-radius: 8px;
+        transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease, transform 0.12s ease;
+      }
+      .btn {
+        border-color: rgba(37, 99, 235, 0.4);
+        background: #1d4ed8;
+        color: #eff6ff;
+      }
+      .btn.secondary,
+      .btn.subtle,
+      .title-btn,
+      .queue-head-btn,
+      .attachment-btn {
+        background: rgba(30, 41, 59, 0.74);
+      }
+      .btn:not([disabled]):hover,
+      .title-btn:not([disabled]):hover,
+      .advanced-btn:not([disabled]):hover,
+      .queue-head-btn:not([disabled]):hover,
+      .attachment-btn:not([disabled]):hover,
+      .template-btn:not([disabled]):hover {
+        border-color: rgba(96, 165, 250, 0.58);
+        box-shadow: 0 8px 18px rgba(2, 6, 23, 0.18);
+      }
+      .advanced-card {
+        border-color: rgba(37, 99, 235, 0.28);
+        background: rgba(30, 41, 59, 0.48);
+      }
+      .advanced-switch input:checked + span {
+        background: #2563eb;
+        border-color: rgba(96, 165, 250, 0.7);
+      }
+      .advanced-btn {
+        background: #1d4ed8;
+        border-color: rgba(96, 165, 250, 0.45);
+      }
+      .queue-wrap {
+        border-color: rgba(100, 116, 139, 0.32);
+        background: rgba(15, 23, 42, 0.96);
+      }
+      .queue-item,
+      .attachment-item {
+        border-radius: 8px;
+        background: rgba(30, 41, 59, 0.58);
+      }
+      .status {
+        color: #93c5fd;
+      }
+      .dock[data-theme="light"] .launcher,
+      .dock[data-theme="light"] .card,
+      .dock[data-theme="light"] .queue-wrap,
+      .dock[data-theme="light"] .title-edit-card,
+      .dock[data-theme="light"] .template-wrap,
+      .dock[data-theme="light"] .advanced-card,
+      .dock[data-theme="light"] .attachment-wrap {
+        background: rgba(255, 255, 255, 0.98);
+        border-color: rgba(203, 213, 225, 0.82);
+      }
+      .dock[data-theme="light"] .card {
+        box-shadow: 0 22px 54px rgba(15, 23, 42, 0.18);
+      }
+      .dock[data-theme="light"] .input,
+      .dock[data-theme="light"] .title-input,
+      .dock[data-theme="light"] .queue-edit-input,
+      .dock[data-theme="light"] .advanced-field-row input {
+        background: #f8fafc;
+        border-color: #cbd5e1;
+      }
+      .dock[data-theme="light"] .btn {
+        background: #eff6ff;
+        color: #1d4ed8;
+      }
+      .dock[data-theme="light"] .btn.secondary,
+      .dock[data-theme="light"] .btn.subtle,
+      .dock[data-theme="light"] .title-btn,
+      .dock[data-theme="light"] .queue-head-btn,
+      .dock[data-theme="light"] .attachment-btn {
+        background: #f8fafc;
+      }
+      .dock[data-theme="light"] .queue-item,
+      .dock[data-theme="light"] .attachment-item {
+        background: #f8fafc;
+      }
+      .dock[data-theme="light"] .status {
+        color: #2563eb;
+      }
     </style>
 `;

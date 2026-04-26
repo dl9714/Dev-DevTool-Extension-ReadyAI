@@ -64,6 +64,11 @@ function clearTitleBadge() {
   try { document.title = cleanTitle; } catch (_) {}
 }
 var STEERING_AUTO_SEND_DELAY_MS = 1000;
+var READY_AI_CONTENT_VERSION = '2026-04-26-new-chat-reuse-v9';
+try {
+  var existingSteeringHost = document.getElementById('ready-ai-steering-host');
+  if (existingSteeringHost) existingSteeringHost.remove();
+} catch (_) {}
 var steeringHost = null;
 var steeringRoot = null;
 var steeringRefs = null;
@@ -132,6 +137,7 @@ var steeringTemplateRenderSignature = '';
 var steeringUiRafId = 0;
 var steeringLastPositionSignature = '';
 var steeringDraftText = '';
+var steeringNewChatSendPending = false;
 var steeringSessionSiteKey = '';
 var steeringQueueEditingId = null;
 var steeringQueueEditingText = '';

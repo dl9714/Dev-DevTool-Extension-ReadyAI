@@ -6,21 +6,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     :root {
-      --bg: #f7f8fb;
-      --bg-soft: #f3f4f8;
+      --bg: #eef2f7;
+      --bg-soft: #f8fafc;
       --card: #fff;
-      --border: #e4e7ee;
-      --text: #1f2430;
-      --sub: #5b6474;
-      --muted: #8a91a1;
-      --accent: #6b7cff;
-      --danger: #c83d3d;
+      --border: #d7deea;
+      --border-strong: #c4ccda;
+      --text: #111827;
+      --sub: #475569;
+      --muted: #64748b;
+      --accent: #2563eb;
+      --accent-soft: #dbeafe;
+      --success: #059669;
+      --warning: #b45309;
+      --danger: #b42318;
+      --shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: Arial, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
-      background: var(--bg);
+      background: #eef2f7;
       color: var(--text);
       width: 420px;
       height: 640px;
@@ -31,15 +36,19 @@
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background: var(--bg);
+      background:
+        radial-gradient(circle at 100% 0%, rgba(37, 99, 235, 0.08), transparent 34%),
+        linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
     }
     .main-scroll,
     .sheet-scroll {
       width: 100%;
       height: 100%;
       overflow-y: auto;
-      padding: 16px;
+      padding: 14px;
       padding-bottom: 68px;
+      scrollbar-color: #cbd5e1 transparent;
+      scrollbar-width: thin;
     }
     .header {
       display: flex;
@@ -706,6 +715,127 @@
       color: var(--accent);
       cursor: pointer;
     }
+    .summary-card,
+    .site-row,
+    .sound-card,
+    .dash-row,
+    .template-row,
+    .history-row,
+    .util-card,
+    .title-manager-row,
+    .hero-card,
+    .compact-card,
+    .mini-stat,
+    .action-btn,
+    .toggle-tile {
+      border-radius: 8px;
+    }
+    .summary-card,
+    .hero-card,
+    .compact-card,
+    .util-card,
+    .sound-card,
+    .dash-row,
+    .template-row,
+    .history-row,
+    .title-manager-row {
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: var(--shadow);
+    }
+    .hero-card {
+      position: relative;
+      overflow: hidden;
+    }
+    .hero-card::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 3px;
+      background: linear-gradient(90deg, #2563eb, #059669);
+    }
+    .mini-stat,
+    .toggle-tile {
+      background: #f8fafc;
+    }
+    .mini-stat-value {
+      color: #0f172a;
+    }
+    input[type="text"], input[type="time"], input[type="number"], textarea, select,
+    .btn,
+    .action-btn {
+      border-radius: 8px;
+    }
+    input[type="text"], input[type="time"], input[type="number"], textarea, select {
+      border-color: #cbd5e1;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    }
+    input[type="text"]:focus, input[type="time"]:focus, input[type="number"]:focus, textarea:focus, select:focus {
+      border-color: rgba(37, 99, 235, 0.56);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+    .btn,
+    .action-btn {
+      transition: transform 0.12s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+    }
+    .btn:not([disabled]):hover,
+    .action-btn:hover {
+      border-color: rgba(37, 99, 235, 0.42);
+      background: #f8fafc;
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.1);
+    }
+    .action-btn:hover {
+      transform: translateY(-1px);
+    }
+    .btn.primary,
+    .action-btn.primary {
+      border-color: rgba(37, 99, 235, 0.45);
+      background: #eff6ff;
+      color: #1d4ed8;
+      font-weight: 700;
+    }
+    .btn.active {
+      border-color: rgba(5, 150, 105, 0.46);
+      background: #ecfdf5;
+      color: #047857;
+    }
+    .sheet {
+      background: rgba(248, 250, 252, 0.98);
+    }
+    .sheet-head {
+      background: rgba(248, 250, 252, 0.94);
+      border-bottom: 1px solid rgba(215, 222, 234, 0.86);
+      backdrop-filter: blur(12px);
+    }
+    .slider {
+      background-color: #cbd5e1;
+    }
+    .chip,
+    .pill,
+    .badge,
+    .quick-chip {
+      background: #f8fafc;
+      color: #334155;
+      border-color: #d7deea;
+    }
+    .state-chip.orange {
+      background: #fff7ed;
+      color: var(--warning);
+      border-color: #fed7aa;
+    }
+    .state-chip.green {
+      background: #ecfdf5;
+      color: #047857;
+      border-color: #a7f3d0;
+    }
+    .text-link-btn {
+      border-radius: 6px;
+    }
+    .text-link-btn:hover {
+      color: #1d4ed8;
+      text-decoration: underline;
+    }
     .hidden { display: none !important; }
   </style>
 </head>
@@ -819,7 +949,7 @@
         <div class="sheet-head">
           <div class="sheet-title-wrap">
             <h3 class="sheet-title">상세설정</h3>
-            <div class="sheet-sub">후속 지시, 배지, 탭 제목, 이력, 팝업 동작을 세분화해서 켜고 끌 수 있습니다.</div>
+            <div class="sheet-sub">후속 지시, 탭 제목, 이력, 팝업 동작을 세분화해서 켜고 끌 수 있습니다.</div>
           </div>
           <button class="btn ghost" data-close-sheet>닫기</button>
         </div>
@@ -830,10 +960,6 @@
         <div class="option"><span>전송 후 후속 지시 창 자동 닫기</span><label class="switch"><input type="checkbox" id="advanced-steering-close-after-send"><span class="slider"></span></label></div>
         <div class="option"><span>후속 지시 대기 숫자 표시</span><label class="switch"><input type="checkbox" id="advanced-steering-count-visible"><span class="slider"></span></label></div>
         <div class="option"><span>후속 지시 고급설정</span><label class="switch"><input type="checkbox" id="advanced-steering-advanced-enabled"><span class="slider"></span></label></div>
-        <div class="divider"></div>
-        <div class="section-title">배지 세부</div>
-        <div class="option"><span>익스텐션 배지 표시</span><label class="switch"><input type="checkbox" id="advanced-badge-enabled"><span class="slider"></span></label></div>
-        <div class="option"><span>배지 오른쪽 숫자 표시</span><label class="switch"><input type="checkbox" id="advanced-badge-count-enabled"><span class="slider"></span></label></div>
         <div class="divider"></div>
         <div class="section-title">탭 제목 세부</div>
         <div class="option"><span>탭 제목 상태 점 표시</span><label class="switch"><input type="checkbox" id="advanced-title-badge-enabled"><span class="slider"></span></label></div>
@@ -910,7 +1036,7 @@
         <div class="desc">켜두면 후속 지시 패널이 세로로 길어지고, 기본 Enter가 현재 대화 대신 새 ChatGPT 채팅 탭으로 전송됩니다.</div>
         <div class="field" style="margin-top: 10px;">
           <label>새 채팅 탭 수</label>
-          <input type="number" id="steering-new-chat-count" min="1" max="8" step="1" inputmode="numeric" placeholder="3" />
+          <input type="text" id="steering-new-chat-count" inputmode="numeric" pattern="[1-8]" autocomplete="off" placeholder="3" />
         </div>
         <div class="hint">1~8개까지 열 수 있습니다. 기본값은 3개입니다.</div>
       </div>
@@ -924,15 +1050,6 @@
           </div>
           <button class="btn ghost" data-close-sheet>닫기</button>
         </div>
-        <div class="option">
-          <span>아이콘 배지 표시</span>
-          <label class="switch">
-            <input type="checkbox" id="badge-toggle">
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="desc">꺼두면 흰색/주황색/연두색 배지를 모두 숨깁니다.</div>
-        <div class="divider"></div>
         <div class="sound-card">
           <div class="sound-top">
             <div class="sound-head">

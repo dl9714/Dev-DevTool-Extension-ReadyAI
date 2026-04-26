@@ -150,6 +150,21 @@ async function waitForSteeringAttachmentUploadReady(composer, options = {}) {
     sawDisabledSend,
   };
 }
+async function waitForSteeringComposerText(composer, expectedText, timeoutMs = 1500) {
+  const normalize = (value) => String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+  const expected = normalize(expectedText);
+  const deadline = Date.now() + Math.max(300, Number(timeoutMs) || 1500);
+  let current = '';
+  while (Date.now() <= deadline) {
+    try {
+      current = normalize(getCurrentComposerText(composer));
+      if (current === expected) return { ok: true, current };
+    } catch (_) {}
+    await waitForSteeringTick(90);
+  }
+  try { current = normalize(getCurrentComposerText(composer)); } catch (_) {}
+  return { ok: current === expected, current };
+}
 async function sendSteeringPromptText(text, options = {}) {
   const composer = getActiveComposer();
   if (!composer) {
@@ -172,13 +187,22 @@ async function sendSteeringPromptText(text, options = {}) {
     }
   }
   suppressComposerAcknowledge(1700);
-  const mergedText = mergeSteeringText(getCurrentComposerText(composer), text);
+  const existingText = options.replaceComposerText ? '' : getCurrentComposerText(composer);
+  const mergedText = mergeSteeringText(existingText, text);
   if (mergedText) {
     const filled = setControlValue(composer, mergedText);
     if (!filled) {
       return { ok: false, sent: false, message: '입력창에 지시를 넣지 못했습니다.' };
     }
-    await waitForSteeringTick(90);
+    let textReady = await waitForSteeringComposerText(composer, mergedText, 1500);
+    if (!textReady.ok) {
+      setControlValue(composer, mergedText);
+      textReady = await waitForSteeringComposerText(composer, mergedText, 1900);
+      if (!textReady.ok) {
+        return { ok: false, sent: false, message: '입력창에 지시를 안정적으로 반영하지 못했습니다.' };
+      }
+    }
+    await waitForSteeringTick(140);
   } else if (!images.length) {
     return { ok: false, sent: false, message: '보낼 내용이 없습니다.' };
   } else {
@@ -201,6 +225,13 @@ async function sendSteeringPromptText(text, options = {}) {
     () => dispatchSubmitKey(composer, { metaKey: true }),
   ];
   for (const attempt of attempts) {
+    if (mergedText) {
+      const currentText = String(getCurrentComposerText(composer) || '').trim();
+      if (currentText !== String(mergedText || '').trim()) {
+        setControlValue(composer, mergedText);
+        await waitForSteeringComposerText(composer, mergedText, 1200);
+      }
+    }
     const sent = await tryTriggerComposerSend(composer, attempt, { submitStartTimeoutMs: options.submitStartTimeoutMs });
     if (sent) {
       return { ok: true, sent: true, message: '전송했습니다.' };
@@ -216,6 +247,18 @@ function hasLikelySteeringSubmissionStarted() {
   if (!composer) return false;
   try {
     return !String(getCurrentComposerText(composer) || '').trim();
+  } catch (_) {
+    return false;
+  }
+}
+function hasChatGptRateLimitNotice() {
+  if (getSiteKey() !== 'chatgpt') return false;
+  try {
+    const text = String(document.body?.innerText || document.documentElement?.innerText || '')
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return /(요청이\s*너무\s*많|너무\s*빠르게\s*보내|일시적으로\s*제한|몇\s*분\s*후\s*다시|too\s*many\s*requests|sending\s*requests\s*too\s*fast|temporarily\s*limited|rate\s*limit)/i.test(text);
   } catch (_) {
     return false;
   }
@@ -243,19 +286,30 @@ async function sendSteeringPromptTextWhenReady(text, options = {}) {
   if (!value) return { ok: false, sent: false, message: '보낼 내용이 없습니다.' };
   const timeoutMs = Math.max(5000, Number(options.timeoutMs) || 45000);
   const deadline = Date.now() + timeoutMs;
+  const skipReadinessGate = !!options.skipReadinessGate || options.source === 'new_chat_tab';
   let attempt = 0;
   let lastMessage = '';
   while (Date.now() <= deadline) {
+    if (hasChatGptRateLimitNotice()) {
+      return {
+        ok: false,
+        sent: false,
+        retryable: false,
+        rateLimited: true,
+        message: 'ChatGPT 요청 제한이 감지되었습니다. 잠시 후 다시 시도해 주세요.',
+      };
+    }
     if (!steeringEnabled) {
       return { ok: false, sent: false, message: '후속 지시 기능이 꺼져 있습니다.' };
     }
     try { maybeRescanShadowRoots(); } catch (_) {}
-    if (monitoring && !canAutoSendSteeringNow()) {
+    if (!skipReadinessGate && monitoring && !canAutoSendSteeringNow()) {
       lastMessage = '전송 가능 상태를 기다리는 중입니다.';
     } else {
       const result = await sendSteeringPromptText(value, {
         images: [],
-        submitStartTimeoutMs: Math.max(900, Number(options.submitStartTimeoutMs) || 2500),
+        replaceComposerText: options.source === 'new_chat_tab',
+        submitStartTimeoutMs: Math.max(1200, Number(options.submitStartTimeoutMs) || 3500),
       });
       lastMessage = result?.message || '';
       if (result?.ok && result?.sent) {
@@ -332,12 +386,23 @@ function submitSteeringInputToNewChats() {
   const refs = ensureSteeringUi();
   const text = String(refs?.input?.value || '').trim();
   const imageCount = getSteeringDraftAttachmentCount();
+  const getRequestFailureMessage = (errorMessage) => {
+    const message = String(errorMessage || '').trim();
+    if (/extension context invalidated|context invalidated|receiving end does not exist|could not establish connection|message port closed/i.test(message)) {
+      return '확장프로그램이 새로고침되어 현재 탭 연결이 끊겼습니다. 이 ChatGPT 탭을 새로고침한 뒤 다시 시도해 주세요.';
+    }
+    return message || '새 채팅 탭 전송 요청에 실패했습니다.';
+  };
+  const finishPending = () => {
+    steeringNewChatSendPending = false;
+    updateSteeringUi();
+  };
   if (!steeringAdvancedEnabled) {
     setSteeringStatus('고급설정을 먼저 켜주세요.', true);
     return false;
   }
-  if (getSiteKey() !== 'chatgpt') {
-    setSteeringStatus('새 채팅 탭 전송은 ChatGPT에서만 지원합니다.', true);
+  if (steeringNewChatSendPending) {
+    setSteeringStatus('새 채팅 탭 전송 요청을 처리 중입니다.');
     return false;
   }
   if (!text) {
@@ -354,8 +419,15 @@ function submitSteeringInputToNewChats() {
   try {
     chrome.storage.local.set({ [STEERING_STORAGE_KEYS.NEW_CHAT_TAB_COUNT]: count });
   } catch (_) {}
-  setSteeringStatus(`새 ChatGPT 채팅 ${count}개를 여는 중...`);
+  steeringNewChatSendPending = true;
+  setSteeringStatus(`열린 ChatGPT 탭을 확인하는 중... 요청 ${count}개`);
+  updateSteeringUi();
   try {
+    if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) {
+      setSteeringStatus(getRequestFailureMessage('context invalidated'), true);
+      finishPending();
+      return false;
+    }
     chrome.runtime.sendMessage({
       action: 'open_chatgpt_new_chat_tabs',
       text,
@@ -363,23 +435,23 @@ function submitSteeringInputToNewChats() {
       sourceUrl: location.href,
     }, (resp) => {
       if (chrome.runtime.lastError) {
-        setSteeringStatus(chrome.runtime.lastError.message || '새 채팅 탭을 만들지 못했습니다.', true);
-        updateSteeringUi();
+        setSteeringStatus(getRequestFailureMessage(chrome.runtime.lastError.message), true);
+        finishPending();
         return;
       }
       if (!resp?.ok) {
         setSteeringStatus(resp?.message || '새 채팅 탭 전송에 실패했습니다.', true);
-        updateSteeringUi();
+        finishPending();
         return;
       }
       setSteeringDraftText('');
       try { if (refs?.input) refs.input.value = ''; } catch (_) {}
-      setSteeringStatus(`새 ChatGPT 채팅 ${resp.sentCount || count}개에 전송 요청 완료`);
-      updateSteeringUi();
+      setSteeringStatus(resp?.message || `새 ChatGPT 채팅 ${resp.sentCount || count}개에 전송 요청 완료`);
+      finishPending();
     });
-  } catch (_) {
-    setSteeringStatus('새 채팅 탭 전송 요청에 실패했습니다.', true);
-    updateSteeringUi();
+  } catch (error) {
+    setSteeringStatus(getRequestFailureMessage(error?.message), true);
+    finishPending();
     return false;
   }
   return true;
@@ -410,4 +482,3 @@ function submitSteeringInput() {
 ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click'].forEach((type) => {
   try { document.addEventListener(type, suppressFollowupPointerAfterSteeringDrop, true); } catch (_) {}
 });
-

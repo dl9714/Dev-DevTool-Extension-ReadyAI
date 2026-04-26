@@ -53,10 +53,16 @@ const STORAGE_KEYS = {
   QUIET_HOURS_START: 'quietHoursStart',
   QUIET_HOURS_END: 'quietHoursEnd',
   CUSTOM_TAB_TITLES: 'customTabTitles',
+  CHATGPT_RATE_LIMIT_UNTIL: 'chatGptRateLimitUntil',
 };
 const GEMINI_PROBE_ALARM = 'ready_ai_gemini_probe';
 const GEMINI_PROBE_MIN_PERIOD_MIN = 1; // chrome.alarms 최소 1분
 const GEMINI_PROBE_NUDGE_COOLDOWN_MS = 30_000; // 너무 자주 탭 전환하면 거슬림
+const CHATGPT_NEW_CHAT_TAB_GAP_MS = 7_000;
+const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
+const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
+const CHATGPT_NEW_CHAT_MAX_TABS = 8;
+const READY_AI_CONTENT_VERSION = '2026-04-26-new-chat-reuse-v9';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
 const CONTENT_SCRIPT_FILES = Object.freeze([
   'src/sites.js',
@@ -83,8 +89,8 @@ const SOUND_PRESETS = Object.freeze({
 });
 let settings = {
   dndMode: false,
-  badgeEnabled: true,
-  badgeCountEnabled: true,
+  badgeEnabled: false,
+  badgeCountEnabled: false,
   completionHistoryEnabled: true,
   individualCompletionNotificationEnabled: true,
   individualCompletionSound: SOUND_PRESETS.soft,
@@ -118,6 +124,7 @@ const COMPLETION_HISTORY_LIMIT = 40;
 let _siteConfigCache = { enabledSites: null, customSites: [] };
 let completionHistoryCache = [];
 let completionHistoryFlushTimer = null;
+let chatGptNewChatRateLimitUntil = 0;
 let tabMetaCache = {}; // { [tabId]: { id, title, url, active, discarded, windowId } }
 let tabCacheInitialized = false;
 let actionStateCache = {}; // { [tabId]: signature }
@@ -390,10 +397,22 @@ function pTabsGet(tabId) {
     }
   });
 }
-function pTabsSendMessage(tabId, message) {
+function pTabsReload(tabId) {
   return new Promise((resolve) => {
     try {
-      chrome.tabs.sendMessage(tabId, message, () => {
+      chrome.tabs.reload(tabId, {}, () => {
+        if (chrome.runtime.lastError) return resolve(false);
+        resolve(true);
+      });
+    } catch (_) {
+      resolve(false);
+    }
+  });
+}
+function pTabsSendMessage(tabId, message, options = null) {
+  return new Promise((resolve) => {
+    try {
+      chrome.tabs.sendMessage(tabId, message, options || {}, () => {
         // 수신자가 없으면 runtime.lastError가 설정된다.
         if (chrome.runtime.lastError) return resolve(false);
         resolve(true);
@@ -403,7 +422,7 @@ function pTabsSendMessage(tabId, message) {
     }
   });
 }
-function pTabsSendMessageResult(tabId, message, timeoutMs = 0) {
+function pTabsSendMessageResult(tabId, message, timeoutMs = 0, options = null) {
   return new Promise((resolve) => {
     let settled = false;
     let timer = null;
@@ -423,7 +442,7 @@ function pTabsSendMessageResult(tabId, message, timeoutMs = 0) {
       }, Math.max(1000, timeout));
     }
     try {
-      chrome.tabs.sendMessage(tabId, message, (response) => {
+      chrome.tabs.sendMessage(tabId, message, options || {}, (response) => {
         if (chrome.runtime.lastError) {
           finish({ ok: false, message: chrome.runtime.lastError.message || '탭 메시지 전송 실패' });
           return;
@@ -517,6 +536,33 @@ function pScriptingExec(tabId, files, allFrames = true) {
     }
   });
 }
+function pScriptingExecMainFunction(tabId, func, args = []) {
+  return new Promise((resolve) => {
+    const run = (withMainWorld) => {
+      try {
+        if (!chrome.scripting?.executeScript) return resolve(null);
+        const details = {
+          target: { tabId, allFrames: false },
+          func,
+          args: Array.isArray(args) ? args : [],
+        };
+        if (withMainWorld) details.world = 'MAIN';
+        chrome.scripting.executeScript(details, (results) => {
+          if (chrome.runtime.lastError) {
+            if (withMainWorld) return run(false);
+            return resolve(null);
+          }
+          const first = Array.isArray(results) ? results[0] : null;
+          resolve(first?.result ?? null);
+        });
+      } catch (_) {
+        if (withMainWorld) return run(false);
+        resolve(null);
+      }
+    };
+    run(true);
+  });
+}
 function pRuntimeSendMessage(message) {
   return new Promise((resolve) => {
     try {
@@ -598,7 +644,7 @@ function getSoundOptionsByKind(kind) {
     customSoundName: settings.individualCompletionCustomSoundName || '',
   };
 }
-async function ensureContentScripts(tab) {
+async function ensureContentScripts(tab, options = {}) {
   // 세션 복원/탭 discard 타이밍에 따라 content script가 아직 주입되지 않은 탭이 생긴다.
   // 이 경우 title 뱃지(이모지)와 status_update가 올라오지 않아서 “뱃지 사라짐”처럼 보인다.
   const tabId = tab?.id;
@@ -607,15 +653,20 @@ async function ensureContentScripts(tab) {
   if (!url) return false;
   const site = resolveSiteForUrl(url);
   if (!site) return false; // 등록/활성된 사이트만
-  // 1) ping으로 content 존재 확인
-  const alive = await pTabsSendMessage(tabId, { action: 'ping' });
-  if (alive) return true;
+  const messageOptions = options.frameId === 0 ? { frameId: 0 } : null;
+  const topFrameOnly = !!options.topFrameOnly;
+  const injectAllFrames = options.allFrames !== false;
+  // 1) ping으로 content 존재 확인. 구버전 content script는 버전이 없으므로 재주입한다.
+  const alive = await pTabsSendMessageResult(tabId, { action: 'ping', topFrameOnly }, 1500, messageOptions);
+  if (alive?.ok && alive.readyAiContentVersion === READY_AI_CONTENT_VERSION && !options.forceInject) return true;
   // 2) 없으면 강제 주입(필요 권한: "scripting")
-  const injected = await pScriptingExec(tabId, CONTENT_SCRIPT_FILES, true);
+  let injected = await pScriptingExec(tabId, CONTENT_SCRIPT_FILES, injectAllFrames);
+  if (!injected && injectAllFrames) injected = await pScriptingExec(tabId, CONTENT_SCRIPT_FILES, false);
   if (!injected) return false;
   // 3) 주입 직후 즉시 체크 요청
-  await pTabsSendMessage(tabId, { action: 'force_check', reason: 'inject' });
-  return true;
+  const reinjected = await pTabsSendMessageResult(tabId, { action: 'ping', topFrameOnly }, 1500, messageOptions);
+  await pTabsSendMessage(tabId, { action: 'force_check', reason: 'inject' }, messageOptions);
+  return !!reinjected?.ok;
 }
 function isChatGptUrl(url) {
   try {
@@ -633,14 +684,69 @@ function getChatGptNewChatUrl(sourceUrl) {
   } catch (_) {}
   return 'https://chatgpt.com/';
 }
+function noteChatGptRateLimit() {
+  chatGptNewChatRateLimitUntil = Math.max(chatGptNewChatRateLimitUntil || 0, Date.now() + CHATGPT_RATE_LIMIT_COOLDOWN_MS);
+  try { chrome.storage.local.set({ [STORAGE_KEYS.CHATGPT_RATE_LIMIT_UNTIL]: chatGptNewChatRateLimitUntil }); } catch (_) {}
+}
+function getChatGptRateLimitRemainingSec() {
+  return Math.max(0, Math.ceil(((chatGptNewChatRateLimitUntil || 0) - Date.now()) / 1000));
+}
+function isChatGptConversationUrl(url) {
+  try {
+    const parsed = new URL(String(url || ''));
+    if (!isChatGptUrl(parsed.href)) return false;
+    return /^\/c\/[^/]+/i.test(parsed.pathname) || /\/c\/[^/]+/i.test(parsed.pathname);
+  } catch (_) {
+    return false;
+  }
+}
+async function waitForChatGptTabUrl(tabId, timeoutMs = 7000) {
+  const deadline = Date.now() + Math.max(1000, Number(timeoutMs) || 7000);
+  let lastChatGptTab = null;
+  while (Date.now() <= deadline) {
+    const tab = await pTabsGet(tabId);
+    if (tab?.id && isChatGptUrl(tab.url || '')) {
+      lastChatGptTab = tab;
+      return tab;
+    }
+    await sleep(180);
+  }
+  return lastChatGptTab;
+}
+function getChatGptTabReuseRank(tab, sourceTab) {
+  const sourceWindowId = typeof sourceTab?.windowId === 'number' ? sourceTab.windowId : null;
+  const sourceIndex = typeof sourceTab?.index === 'number' ? sourceTab.index : null;
+  const tabIndex = typeof tab?.index === 'number' ? tab.index : null;
+  const sameWindowRank = sourceWindowId != null && tab?.windowId === sourceWindowId ? 0 : 1;
+  const distance = sourceIndex != null && tabIndex != null ? Math.abs(tabIndex - sourceIndex) : 9999;
+  const rightSideRank = sourceIndex != null && tabIndex != null && tabIndex >= sourceIndex ? 0 : 1;
+  return { sameWindowRank, distance, rightSideRank, tabIndex: tabIndex ?? 9999 };
+}
+function sortReusableChatGptTabs(tabs, sourceTab) {
+  return tabs.slice().sort((a, b) => {
+    const ar = getChatGptTabReuseRank(a, sourceTab);
+    const br = getChatGptTabReuseRank(b, sourceTab);
+    return (ar.sameWindowRank - br.sameWindowRank)
+      || (ar.distance - br.distance)
+      || (ar.rightSideRank - br.rightSideRank)
+      || (ar.tabIndex - br.tabIndex)
+      || ((a.id || 0) - (b.id || 0));
+  });
+}
+function pushUniqueTab(list, tab) {
+  if (!tab?.id) return false;
+  if (list.some((item) => item?.id === tab.id)) return false;
+  list.push(tab);
+  return true;
+}
 async function waitForNewChatContent(tabId, timeoutMs = 30000) {
   const deadline = Date.now() + Math.max(5000, Number(timeoutMs) || 30000);
   while (Date.now() <= deadline) {
     const tab = await pTabsGet(tabId);
     if (tab?.id && isChatGptUrl(tab.url || '')) {
-      const ready = await ensureContentScripts(tab);
+      const ready = await ensureContentScripts(tab, { allFrames: false, topFrameOnly: true, frameId: 0 });
       if (ready) {
-        const alive = await pTabsSendMessage(tabId, { action: 'ping' });
+        const alive = await pTabsSendMessage(tabId, { action: 'ping', topFrameOnly: true }, { frameId: 0 });
         if (alive) return true;
       }
     }
@@ -648,61 +754,726 @@ async function waitForNewChatContent(tabId, timeoutMs = 30000) {
   }
   return false;
 }
+async function inspectChatGptTabRender(tabId, text) {
+  return pScriptingExecMainFunction(tabId, (rawText) => {
+    const norm = (value) => String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+    const target = norm(rawText);
+    const isVisible = (el) => {
+      if (!el) return false;
+      try {
+        const style = window.getComputedStyle(el);
+        if (!style || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+        if (parseFloat(style.opacity || '1') === 0) return false;
+        const rect = el.getBoundingClientRect();
+        return !!rect && rect.width > 0 && rect.height > 0;
+      } catch (_) {
+        return !!(el.offsetWidth || el.offsetHeight || el.getClientRects?.().length);
+      }
+    };
+    const bodyText = norm(document.body?.innerText || document.documentElement?.innerText || '');
+    const turnNodes = Array.from(document.querySelectorAll('[data-testid^="conversation-turn-"], article[data-testid*="conversation-turn"], main [data-message-author-role]'));
+    const hasTurns = turnNodes.some((node) => isVisible(node));
+    const hasTarget = !!target && turnNodes.some((node) => {
+      try { return isVisible(node) && norm(node.innerText || node.textContent || '').includes(target); } catch (_) { return false; }
+    });
+    const composer = document.querySelector('#prompt-textarea, [data-testid="prompt-textarea"], textarea, div[contenteditable="true"][role="textbox"]');
+    const hasComposer = isVisible(composer);
+    const rateLimited = /(요청이\s*너무\s*많|너무\s*빠르게\s*보내|일시적으로\s*제한|몇\s*분\s*후\s*다시|too\s*many\s*requests|sending\s*requests\s*too\s*fast|temporarily\s*limited|rate\s*limit)/i.test(bodyText);
+    return {
+      href: String(location.href || ''),
+      title: String(document.title || ''),
+      readyState: String(document.readyState || ''),
+      bodyTextLength: bodyText.length,
+      hasComposer,
+      hasTarget,
+      hasTurns,
+      rateLimited,
+      blank: bodyText.length < 20 && !hasComposer && !hasTurns,
+    };
+  }, [text]);
+}
+async function findChatGptRateLimitNotice(tabIds = null) {
+  const tabs = Array.isArray(tabIds) && tabIds.length
+    ? (await Promise.all(tabIds.map((tabId) => pTabsGet(tabId)))).filter(Boolean)
+    : (await pTabsQuery({}));
+  for (const tab of tabs) {
+    if (!tab?.id || !isChatGptUrl(tab.url || '')) continue;
+    const snapshot = await inspectChatGptTabRender(tab.id, '');
+    if (snapshot?.rateLimited) {
+      noteChatGptRateLimit();
+      return {
+        ok: false,
+        tabId: tab.id,
+        rateLimited: true,
+        message: 'ChatGPT 요청 제한이 감지되어 새 채팅 전송을 중단했습니다. 몇 분 후 다시 시도해 주세요.',
+      };
+    }
+  }
+  return null;
+}
+async function waitForNewChatConversationSettled(tabId, text, timeoutMs = 26000) {
+  const deadline = Date.now() + Math.max(6000, Number(timeoutMs) || 26000);
+  let last = null;
+  let blankSince = 0;
+  let reloadedBlankTab = false;
+  while (Date.now() <= deadline) {
+    const tab = await pTabsGet(tabId);
+    if (!tab?.id) return { ok: false, tabId, message: '새 채팅 탭을 찾지 못했습니다.' };
+    const snapshot = await inspectChatGptTabRender(tabId, text);
+    const href = snapshot?.href || tab.url || '';
+    last = { ...(snapshot || {}), tabStatus: tab.status || '', tabUrl: tab.url || '' };
+    if (snapshot?.rateLimited) {
+      noteChatGptRateLimit();
+      return { ok: false, tabId, rateLimited: true, message: 'ChatGPT 요청 제한이 감지되었습니다.' };
+    }
+    const conversationUrl = isChatGptConversationUrl(href);
+    if (snapshot?.hasTarget) return { ok: true, tabId, url: href, settled: true };
+    if (conversationUrl && snapshot?.hasTurns && !snapshot?.blank) return { ok: true, tabId, url: href, settled: true };
+    if (conversationUrl && snapshot?.bodyTextLength > 120 && !snapshot?.blank) return { ok: true, tabId, url: href, settled: true };
+
+    const looksBlank = !!snapshot?.blank || (conversationUrl && tab.status === 'complete' && (!snapshot || (snapshot.bodyTextLength < 40 && !snapshot.hasComposer && !snapshot.hasTurns)));
+    if (looksBlank) {
+      if (!blankSince) blankSince = Date.now();
+      if (!reloadedBlankTab && Date.now() - blankSince > 1800) {
+        await pTabsReload(tabId);
+        reloadedBlankTab = true;
+        blankSince = 0;
+        await sleep(1800);
+        continue;
+      }
+    } else {
+      blankSince = 0;
+    }
+    await sleep(tab.status === 'loading' ? 240 : 420);
+  }
+  return {
+    ok: false,
+    tabId,
+    renderUnsettled: true,
+    last,
+    message: '전송 후 새 채팅 화면 렌더링을 확인하지 못했습니다.',
+  };
+}
+async function runDirectNewChatPromptSend(tabId, text) {
+  const result = await pScriptingExecMainFunction(tabId, (rawText) => {
+    const targetText = String(rawText || '').trim();
+    const startedAt = Date.now();
+    const beforeUrl = String(location.href || '');
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const norm = (value) => String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+    const pageText = () => {
+      try { return norm(document.body?.innerText || document.documentElement?.innerText || ''); } catch (_) { return ''; }
+    };
+    const rateLimited = () => {
+      const hay = pageText();
+      return /(요청이\s*너무\s*많|너무\s*빠르게\s*보내|일시적으로\s*제한|몇\s*분\s*후\s*다시|too\s*many\s*requests|sending\s*requests\s*too\s*fast|temporarily\s*limited|rate\s*limit)/i.test(hay);
+    };
+    const isVisible = (el) => {
+      if (!el) return false;
+      try {
+        const style = window.getComputedStyle(el);
+        if (!style || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+        if (parseFloat(style.opacity || '1') === 0) return false;
+        const rect = el.getBoundingClientRect();
+        if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+        return true;
+      } catch (_) {
+        return !!(el.offsetWidth || el.offsetHeight || el.getClientRects?.().length);
+      }
+    };
+    const isEnabled = (el) => {
+      if (!el) return false;
+      if (el.disabled === true) return false;
+      const ariaDisabled = String(el.getAttribute?.('aria-disabled') || '').toLowerCase();
+      if (ariaDisabled === 'true') return false;
+      return true;
+    };
+    const isProbablySteeringUi = (el) => {
+      try {
+        const root = el?.getRootNode?.();
+        const host = root?.host || null;
+        const hostText = host ? `${host.id || ''} ${host.className || ''}` : '';
+        const ownText = `${el.id || ''} ${el.className || ''} ${el.getAttribute?.('data-ready-ai') || ''}`;
+        if (/ready[-_ ]?ai|steering|followup/i.test(`${hostText} ${ownText}`)) return true;
+      } catch (_) {}
+      try {
+        return !!el.closest?.('[data-ready-ai], [id^="ready-ai"], [class*="ready-ai"], [class*="steering"]');
+      } catch (_) {
+        return false;
+      }
+    };
+    const textOf = (el) => {
+      if (!el) return '';
+      const tag = String(el.tagName || '').toLowerCase();
+      try {
+        if (tag === 'textarea' || tag === 'input') return String(el.value || '');
+        if (el.isContentEditable) return String(el.innerText || el.textContent || '');
+      } catch (_) {}
+      return '';
+    };
+    const composerScore = (el) => {
+      if (!el || !isVisible(el) || isProbablySteeringUi(el)) return -999;
+      if (el.disabled === true || el.readOnly === true) return -999;
+      if (el.getAttribute?.('aria-hidden') === 'true') return -999;
+      const tag = String(el.tagName || '').toLowerCase();
+      const hay = [
+        el.id,
+        el.getAttribute?.('data-testid'),
+        el.getAttribute?.('role'),
+        el.getAttribute?.('placeholder'),
+        el.getAttribute?.('aria-label'),
+        el.getAttribute?.('aria-placeholder'),
+        el.className,
+      ].filter(Boolean).join(' ');
+      let score = 0;
+      if (/prompt-textarea/i.test(hay)) score += 18;
+      if (/textbox/i.test(hay)) score += 6;
+      if (/message|메시지|무엇이든|prompt/i.test(hay)) score += 5;
+      if (tag === 'textarea') score += 6;
+      if (el.isContentEditable) score += 6;
+      try {
+        const form = el.closest?.('form');
+        if (form) score += 5;
+      } catch (_) {}
+      try {
+        const rect = el.getBoundingClientRect();
+        if (rect.width >= 250) score += 3;
+        if (rect.top >= window.innerHeight * 0.35) score += 3;
+        if (rect.bottom <= window.innerHeight + 40) score += 2;
+      } catch (_) {}
+      return score;
+    };
+    const findComposer = () => {
+      const selectors = [
+        '#prompt-textarea',
+        '[data-testid="prompt-textarea"]',
+        'textarea[placeholder*="Message"]',
+        'textarea[placeholder*="message"]',
+        'textarea[placeholder*="메시지"]',
+        'div[contenteditable="true"][data-testid="prompt-textarea"]',
+        'div[contenteditable="true"][role="textbox"]',
+        'form textarea',
+        'textarea',
+      ];
+      const seen = new Set();
+      let best = null;
+      let bestScore = -999;
+      for (const selector of selectors) {
+        const items = Array.from(document.querySelectorAll(selector));
+        for (const el of items) {
+          if (seen.has(el)) continue;
+          seen.add(el);
+          const score = composerScore(el);
+          if (score > bestScore) {
+            best = el;
+            bestScore = score;
+          }
+        }
+      }
+      return bestScore >= 4 ? best : null;
+    };
+    const hasSubmittedTarget = () => {
+      const target = norm(targetText);
+      if (!target) return false;
+      const selectors = [
+        '[data-message-author-role="user"]',
+        '[data-testid^="conversation-turn-"] [data-message-author-role="user"]',
+        'main [data-message-author-role="user"]',
+      ];
+      for (const selector of selectors) {
+        for (const el of Array.from(document.querySelectorAll(selector))) {
+          try {
+            if (isVisible(el) && norm(el.innerText || el.textContent || '').includes(target)) return true;
+          } catch (_) {}
+        }
+      }
+      return false;
+    };
+    const liveComposer = (composer) => {
+      try {
+        if (composer && document.contains(composer) && isVisible(composer)) return composer;
+      } catch (_) {}
+      return findComposer();
+    };
+    const dispatchTextEvents = (el, value) => {
+      const data = String(value || '');
+      try { el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, data, inputType: 'insertReplacementText' })); } catch (_) {}
+      try { el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, data, inputType: 'insertText' })); } catch (_) {
+        try { el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true })); } catch (_) {}
+      }
+      try { el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true })); } catch (_) {}
+    };
+    const setComposerText = (el, value) => {
+      const nextValue = String(value || '');
+      const tag = String(el.tagName || '').toLowerCase();
+      try { el.focus({ preventScroll: false }); } catch (_) {}
+      if (tag === 'textarea' || tag === 'input') {
+        try {
+          const proto = tag === 'textarea' ? window.HTMLTextAreaElement?.prototype : window.HTMLInputElement?.prototype;
+          const setter = proto && Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) setter.call(el, nextValue);
+          else el.value = nextValue;
+          dispatchTextEvents(el, nextValue);
+          try { el.setSelectionRange(nextValue.length, nextValue.length); } catch (_) {}
+          return norm(el.value) === norm(nextValue);
+        } catch (_) {}
+      }
+      if (el.isContentEditable) {
+        try {
+          const selection = window.getSelection?.();
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          selection?.removeAllRanges?.();
+          selection?.addRange?.(range);
+          let inserted = false;
+          try { inserted = document.execCommand('insertText', false, nextValue); } catch (_) {}
+          if (!inserted || norm(textOf(el)) !== norm(nextValue)) {
+            el.textContent = '';
+            el.appendChild(document.createTextNode(nextValue));
+          }
+          dispatchTextEvents(el, nextValue);
+          return norm(textOf(el)) === norm(nextValue);
+        } catch (_) {
+          try {
+            el.textContent = nextValue;
+            dispatchTextEvents(el, nextValue);
+            return norm(textOf(el)) === norm(nextValue);
+          } catch (_) {}
+        }
+      }
+      return false;
+    };
+    const waitForComposerText = async (composer, expectedText, timeoutMs = 1500) => {
+      const deadline = Date.now() + Math.max(300, Number(timeoutMs) || 1500);
+      let current = composer;
+      while (Date.now() <= deadline) {
+        current = liveComposer(current);
+        if (current && norm(textOf(current)) === norm(expectedText)) {
+          return { ok: true, composer: current, text: textOf(current) };
+        }
+        await sleep(90);
+      }
+      current = liveComposer(current);
+      return { ok: false, composer: current, text: textOf(current) };
+    };
+    const ensureComposerText = async (composer, expectedText) => {
+      let current = liveComposer(composer);
+      let lastText = current ? textOf(current) : '';
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        current = liveComposer(current);
+        if (!current) break;
+        lastText = textOf(current);
+        if (norm(lastText) === norm(expectedText)) {
+          return { ok: true, composer: current, text: lastText };
+        }
+        setComposerText(current, expectedText);
+        const verified = await waitForComposerText(current, expectedText, attempt === 0 ? 1400 : 1900);
+        current = verified.composer || current;
+        lastText = verified.text || '';
+        if (verified.ok) return verified;
+        await sleep(160);
+      }
+      return { ok: false, composer: current, text: lastText };
+    };
+    const buttonText = (el) => [
+      el?.getAttribute?.('aria-label'),
+      el?.getAttribute?.('title'),
+      el?.getAttribute?.('data-testid'),
+      el?.innerText,
+      el?.textContent,
+    ].filter(Boolean).join(' ');
+    const scoreButton = (el, composer, requireEnabled = true) => {
+      if (!el || !isVisible(el) || (requireEnabled && !isEnabled(el)) || isProbablySteeringUi(el)) return -999;
+      const hay = buttonText(el);
+      if (/(stop|중지|cancel|abort|voice|mic|upload|첨부|attachment|tool|menu|옵션|plus|더보기)/i.test(hay)) return -999;
+      let score = 0;
+      if (/send|전송|보내기|submit|arrow-up|paper-plane/i.test(hay)) score += 8;
+      if (el.getAttribute?.('type') === 'submit') score += 5;
+      try {
+        const form = composer?.closest?.('form');
+        if (form && form.contains(el)) score += 5;
+      } catch (_) {}
+      try {
+        const cr = composer.getBoundingClientRect();
+        const br = el.getBoundingClientRect();
+        const dy = Math.abs((br.top + br.bottom) / 2 - (cr.top + cr.bottom) / 2);
+        const dx = Math.abs((br.left + br.right) / 2 - (cr.left + cr.right) / 2);
+        if (dy < 90) score += 3;
+        if (dx < 520) score += 1;
+      } catch (_) {}
+      return score;
+    };
+    const findSendButton = (composer, requireEnabled = true) => {
+      const selectors = [
+        '[data-testid="send-button"]',
+        'button[aria-label*="Send message"]',
+        'button[aria-label*="Send"]',
+        'button[aria-label*="전송"]',
+        'button[aria-label*="보내기"]',
+        'form button[type="submit"]',
+        'button[type="submit"]',
+      ];
+      let best = null;
+      let bestScore = -999;
+      for (const selector of selectors) {
+        for (const el of Array.from(document.querySelectorAll(selector))) {
+          const score = scoreButton(el, composer, requireEnabled);
+          if (score > bestScore) {
+            best = el;
+            bestScore = score;
+          }
+        }
+      }
+      return bestScore >= 5 ? best : null;
+    };
+    const waitForSendButton = async (composer, timeoutMs = 5500) => {
+      const deadline = Date.now() + Math.max(500, Number(timeoutMs) || 5500);
+      let current = composer;
+      let lastButton = null;
+      while (Date.now() <= deadline) {
+        current = liveComposer(current);
+        if (current && norm(textOf(current)) !== norm(targetText)) {
+          const ensured = await ensureComposerText(current, targetText);
+          current = ensured.composer || current;
+        }
+        const btn = findSendButton(current, true);
+        if (btn) return { composer: current, button: btn };
+        lastButton = findSendButton(current, false) || lastButton;
+        await sleep(110);
+      }
+      return { composer: liveComposer(current), button: null, disabledButton: lastButton };
+    };
+    const clickButton = (el) => {
+      if (!el) return false;
+      try { el.focus?.({ preventScroll: false }); } catch (_) {}
+      const events = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+      let dispatched = false;
+      for (const type of events) {
+        try {
+          const Ctor = type.startsWith('pointer') && window.PointerEvent ? window.PointerEvent : window.MouseEvent;
+          const event = new Ctor(type, { bubbles: true, cancelable: true, view: window, button: 0, buttons: type.endsWith('down') ? 1 : 0 });
+          el.dispatchEvent(event);
+          dispatched = true;
+        } catch (_) {}
+      }
+      try { el.click(); return true; } catch (_) {}
+      return dispatched;
+    };
+    const hasTurns = () => !!document.querySelector('[data-testid^="conversation-turn-"], article[data-testid*="conversation-turn"], main [data-message-author-role]');
+    const generating = () => Array.from(document.querySelectorAll('button, [role="button"]')).some((el) => {
+      const hay = buttonText(el);
+      return isVisible(el) && /(stop|중지|cancel|abort)/i.test(hay);
+    });
+    const submitKey = (el, extra = {}) => {
+      const init = { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', which: 13, keyCode: 13, ...extra };
+      try {
+        el.focus?.({ preventScroll: false });
+        el.dispatchEvent(new KeyboardEvent('keydown', init));
+        el.dispatchEvent(new KeyboardEvent('keypress', init));
+        el.dispatchEvent(new KeyboardEvent('keyup', init));
+        return true;
+      } catch (_) {
+        return false;
+      }
+    };
+    const waitForSubmit = async (composer, beforeHadTurns, timeoutMs) => {
+      const deadline = Date.now() + Math.max(2500, Number(timeoutMs) || 9000);
+      let current = composer;
+      let composerClearedAt = 0;
+      while (Date.now() <= deadline) {
+        if (rateLimited()) return false;
+        if (hasSubmittedTarget()) return true;
+        current = liveComposer(current);
+        const currentText = current ? textOf(current) : '';
+        if (!beforeHadTurns && hasTurns()) return true;
+        const urlChanged = !!beforeUrl && location.href !== beforeUrl;
+        if (generating() && urlChanged) return true;
+        if (urlChanged && (!norm(currentText) || hasTurns())) return true;
+        if (!norm(currentText)) {
+          if (!composerClearedAt) composerClearedAt = Date.now();
+          if (Date.now() - composerClearedAt >= 1800) return true;
+        } else {
+          composerClearedAt = 0;
+        }
+        await sleep(120);
+      }
+      return false;
+    };
+    return (async () => {
+      if (!targetText) return { ok: false, message: '보낼 문구가 비어 있습니다.' };
+      if (rateLimited()) return { ok: false, sent: false, rateLimited: true, message: 'ChatGPT 요청 제한이 감지되었습니다.' };
+      if (hasSubmittedTarget()) return { ok: true, sent: true, alreadySent: true, message: '이미 전송된 문구입니다.' };
+      const readyDeadline = Date.now() + 10000;
+      while (Date.now() <= readyDeadline) {
+        if (rateLimited()) return { ok: false, sent: false, rateLimited: true, message: 'ChatGPT 요청 제한이 감지되었습니다.' };
+        if (document.body && /^(interactive|complete)$/i.test(String(document.readyState || ''))) break;
+        await sleep(100);
+      }
+      let composer = null;
+      const composerDeadline = Date.now() + 16000;
+      while (Date.now() <= composerDeadline) {
+        if (rateLimited()) return { ok: false, sent: false, rateLimited: true, message: 'ChatGPT 요청 제한이 감지되었습니다.' };
+        if (hasSubmittedTarget()) return { ok: true, sent: true, alreadySent: true, message: '이미 전송된 문구입니다.' };
+        composer = findComposer();
+        if (composer) break;
+        await sleep(150);
+      }
+      if (!composer) return { ok: false, message: '입력창을 찾지 못했습니다.' };
+      const beforeText = textOf(composer);
+      const fillResult = await ensureComposerText(composer, targetText);
+      composer = fillResult.composer || composer;
+      const afterFill = fillResult.text || textOf(composer);
+      if (!fillResult.ok && norm(afterFill) !== norm(targetText)) {
+        return { ok: false, message: '입력창에 후속 지시를 넣지 못했습니다.', beforeText, afterFill };
+      }
+      const beforeHadTurns = hasTurns();
+      const attempts = [
+        async () => {
+          const ensured = await ensureComposerText(composer, targetText);
+          composer = ensured.composer || composer;
+          if (!ensured.ok) return false;
+          const ready = await waitForSendButton(composer, 2500);
+          composer = ready.composer || composer;
+          const btn = ready.button || findSendButton(composer, true);
+          if (!btn) return false;
+          return clickButton(btn);
+        },
+        async () => {
+          const ensured = await ensureComposerText(composer, targetText);
+          composer = ensured.composer || composer;
+          if (!ensured.ok) return false;
+          const form = composer.closest?.('form');
+          if (!form) return false;
+          try {
+            const btn = findSendButton(composer) || undefined;
+            if (typeof form.requestSubmit === 'function') form.requestSubmit(btn);
+            else form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            return true;
+          } catch (_) {
+            return false;
+          }
+        },
+        async () => {
+          const ensured = await ensureComposerText(composer, targetText);
+          composer = ensured.composer || composer;
+          return ensured.ok && submitKey(composer);
+        },
+        async () => {
+          const ensured = await ensureComposerText(composer, targetText);
+          composer = ensured.composer || composer;
+          return ensured.ok && submitKey(composer, { metaKey: true });
+        },
+        async () => {
+          const ensured = await ensureComposerText(composer, targetText);
+          composer = ensured.composer || composer;
+          return ensured.ok && submitKey(composer, { ctrlKey: true });
+        },
+      ];
+      let lastTriggered = false;
+      for (const attempt of attempts) {
+        if (rateLimited()) return { ok: false, sent: false, rateLimited: true, message: 'ChatGPT 요청 제한이 감지되었습니다.' };
+        if (hasSubmittedTarget()) return { ok: true, sent: true, alreadySent: true, message: '이미 전송된 문구입니다.' };
+        lastTriggered = false;
+        try { lastTriggered = (await attempt()) !== false; } catch (_) { lastTriggered = false; }
+        if (!lastTriggered) continue;
+        if (await waitForSubmit(composer, beforeHadTurns, 9000)) {
+          return { ok: true, sent: true, message: '전송했습니다.', beforeText, afterFill, elapsedMs: Date.now() - startedAt, urlChanged: location.href !== beforeUrl };
+        }
+        if (rateLimited()) return { ok: false, sent: false, rateLimited: true, message: 'ChatGPT 요청 제한이 감지되었습니다.' };
+        await sleep(450);
+      }
+      return {
+        ok: false,
+        sent: false,
+        message: lastTriggered ? '전송 버튼을 눌렀지만 전송 시작을 확인하지 못했습니다.' : '전송 버튼을 찾지 못했습니다.',
+        beforeText,
+        afterFill,
+      };
+    })();
+  }, [text]);
+  if (result?.ok && result?.sent !== false) return { ok: true, tabId, direct: true };
+  if (result?.rateLimited) {
+    return {
+      ok: false,
+      tabId,
+      direct: true,
+      rateLimited: true,
+      message: result?.message || 'ChatGPT 요청 제한이 감지되었습니다.',
+    };
+  }
+  return {
+    ok: false,
+    tabId,
+    direct: true,
+    message: result?.message || '직접 새 채팅 전송에 실패했습니다.',
+  };
+}
 async function enqueuePromptInNewChatTab(tab, text) {
   if (!tab?.id) return { ok: false, tabId: null, message: '탭 생성 실패' };
-  const ready = await waitForNewChatContent(tab.id);
-  if (!ready) {
-    return { ok: false, tabId: tab.id, message: '새 채팅 탭 준비 시간 초과' };
+  await pTabsUpdate(tab.id, { active: true });
+  const chatGptTab = await waitForChatGptTabUrl(tab.id, 7000);
+  if (!chatGptTab?.id) {
+    return { ok: false, tabId: tab.id, message: '새 채팅 탭이 준비되지 않았습니다.' };
   }
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  let directResult = null;
+  const directDelays = [900];
+  for (const delay of directDelays) {
+    if (delay > 0) await sleep(delay);
+    directResult = await runDirectNewChatPromptSend(tab.id, text);
+    if (directResult?.ok) {
+      const settled = await waitForNewChatConversationSettled(tab.id, text);
+      if (settled?.rateLimited) return settled;
+      return { ...directResult, renderSettled: !!settled?.ok, renderMessage: settled?.message || '', url: settled?.url };
+    }
+    if (directResult?.rateLimited) {
+      noteChatGptRateLimit();
+      return directResult;
+    }
+  }
+  const ready = await waitForNewChatContent(tab.id, 10000);
+  if (!ready) {
+    return { ok: false, tabId: tab.id, message: directResult?.message || '새 채팅 탭 준비 시간 초과' };
+  }
+  for (let attempt = 0; attempt < 1; attempt += 1) {
     const response = await pTabsSendMessageResult(tab.id, {
       action: 'send_steering_prompt_now',
       text,
       timeoutMs: 45000,
-      submitStartTimeoutMs: 2500,
+      submitStartTimeoutMs: attempt === 0 ? 3200 : 4800,
       source: 'new_chat_tab',
-    }, 52000);
-    if (response?.ok && response?.sent !== false) return { ok: true, tabId: tab.id };
-    if (attempt === 0) await sleep(900);
-    else return { ok: false, tabId: tab.id, message: response?.message || '새 채팅 탭에 문구를 전송하지 못했습니다.' };
+      skipReadinessGate: true,
+      topFrameOnly: true,
+    }, 52000, { frameId: 0 });
+    if (response?.ok && response?.sent !== false) {
+      const settled = await waitForNewChatConversationSettled(tab.id, text);
+      if (settled?.rateLimited) return settled;
+      return { ok: true, tabId: tab.id, renderSettled: !!settled?.ok, renderMessage: settled?.message || '', url: settled?.url };
+    }
+    if (response?.rateLimited) {
+      noteChatGptRateLimit();
+      return { ok: false, tabId: tab.id, rateLimited: true, message: response?.message || 'ChatGPT 요청 제한이 감지되었습니다.' };
+    }
+    await sleep(900 + attempt * 400);
+    directResult = await runDirectNewChatPromptSend(tab.id, text);
+    if (directResult?.ok) {
+      const settled = await waitForNewChatConversationSettled(tab.id, text);
+      if (settled?.rateLimited) return settled;
+      return { ...directResult, renderSettled: !!settled?.ok, renderMessage: settled?.message || '', url: settled?.url };
+    }
+    if (directResult?.rateLimited) {
+      noteChatGptRateLimit();
+      return directResult;
+    }
+    if (attempt === 2) {
+      return { ok: false, tabId: tab.id, message: response?.message || directResult?.message || '새 채팅 탭에 문구를 전송하지 못했습니다.' };
+    }
   }
   return { ok: false, tabId: tab.id, message: '새 채팅 탭에 문구를 전송하지 못했습니다.' };
 }
 async function openChatGptNewChatTabsForPrompt(message, sender) {
   const text = String(message?.text || '').trim();
   if (!text) return { ok: false, message: '보낼 문구가 비어 있습니다.' };
-  const sourceTab = sender?.tab || null;
-  const sourceUrl = String(message?.sourceUrl || sourceTab?.url || '');
-  if (!isChatGptUrl(sourceUrl)) {
-    return { ok: false, message: '새 채팅 탭 전송은 ChatGPT 탭에서만 사용할 수 있습니다.' };
+  const senderTab = sender?.tab || null;
+  const sourceTab = senderTab?.id ? ((await pTabsGet(senderTab.id)) || senderTab) : null;
+  const sourceUrl = String(message?.sourceUrl || sourceTab?.url || senderTab?.url || '');
+  const remainingSec = getChatGptRateLimitRemainingSec();
+  if (remainingSec > 0) {
+    return { ok: false, rateLimited: true, message: `ChatGPT 요청 제한 감지 후 안정화를 위해 ${remainingSec}초 뒤 다시 시도해 주세요.` };
   }
-  const count = clampInt(message?.count, 3, 1, 8);
+  const existingLimit = await findChatGptRateLimitNotice(sourceTab?.id ? [sourceTab.id] : null);
+  if (existingLimit) return existingLimit;
+  const count = clampInt(message?.count, 3, 1, CHATGPT_NEW_CHAT_MAX_TABS);
   const url = getChatGptNewChatUrl(sourceUrl);
   const createdTabs = [];
-  for (let i = 0; i < count; i += 1) {
+  const targetTabs = [];
+  const results = [];
+  let stoppedByRateLimit = false;
+
+  const existingTabs = await pTabsQuery({});
+  const sourceFromExisting = sourceTab?.id
+    ? (existingTabs.find((tab) => tab?.id === sourceTab.id) || sourceTab)
+    : null;
+  if (sourceFromExisting?.id && isChatGptUrl(sourceUrl || sourceFromExisting.url || '')) {
+    pushUniqueTab(targetTabs, sourceFromExisting);
+  }
+  const reusableTabs = sortReusableChatGptTabs(
+    existingTabs.filter((tab) => {
+      if (!tab?.id || !isChatGptUrl(tab.url || '')) return false;
+      if (typeof sourceTab?.windowId !== 'number') return true;
+      return tab.windowId === sourceTab.windowId;
+    }),
+    sourceFromExisting || sourceTab
+  );
+  for (const tab of reusableTabs) {
+    if (targetTabs.length >= count) break;
+    pushUniqueTab(targetTabs, tab);
+  }
+
+  while (targetTabs.length < count) {
+    const activeLimit = await findChatGptRateLimitNotice();
+    if (activeLimit) {
+      stoppedByRateLimit = true;
+      results.push(activeLimit);
+      break;
+    }
     const props = {
       url,
       active: false,
     };
     if (typeof sourceTab?.windowId === 'number') props.windowId = sourceTab.windowId;
-    if (typeof sourceTab?.index === 'number') props.index = sourceTab.index + i + 1;
+    if (typeof sourceTab?.index === 'number') props.index = sourceTab.index + targetTabs.length + 1;
     const tab = await pTabsCreate(props);
-    if (tab?.id) createdTabs.push(tab);
+    if (!tab?.id) {
+      results.push({ ok: false, tabId: null, message: '새 ChatGPT 탭을 만들지 못했습니다.' });
+      break;
+    }
+    createdTabs.push(tab);
+    targetTabs.push(tab);
+    await sleep(CHATGPT_NEW_CHAT_PREOPEN_GAP_MS);
   }
-  if (!createdTabs.length) {
-    return { ok: false, message: '새 ChatGPT 탭을 만들지 못했습니다.' };
+
+  for (let i = 0; i < targetTabs.length; i += 1) {
+    const activeLimit = await findChatGptRateLimitNotice();
+    if (activeLimit) {
+      stoppedByRateLimit = true;
+      results.push(activeLimit);
+      break;
+    }
+    const tab = targetTabs[i];
+    const result = await enqueuePromptInNewChatTab(tab, text);
+    results.push(result);
+    if (result?.rateLimited) {
+      stoppedByRateLimit = true;
+      noteChatGptRateLimit();
+      break;
+    }
+    if (i < targetTabs.length - 1) await sleep(CHATGPT_NEW_CHAT_TAB_GAP_MS);
   }
-  const results = await Promise.all(createdTabs.map((tab) => enqueuePromptInNewChatTab(tab, text)));
+  if (typeof sourceTab?.id === 'number') {
+    await pTabsUpdate(sourceTab.id, { active: true });
+  }
+  if (!targetTabs.length) {
+    return { ok: false, message: '전송할 ChatGPT 탭을 준비하지 못했습니다.' };
+  }
   const sent = results.filter((item) => item?.ok);
+  const firstFailure = results.find((item) => !item?.ok && item?.message);
+  const reusedCount = Math.max(0, targetTabs.length - createdTabs.length);
   return {
     ok: sent.length > 0,
     requestedCount: count,
     createdCount: createdTabs.length,
+    reusedCount,
+    targetCount: targetTabs.length,
     sentCount: sent.length,
     tabIds: sent.map((item) => item.tabId).filter(Number.isFinite),
-    message: sent.length > 0
-      ? `새 ChatGPT 채팅 ${sent.length}개에 전송 요청 완료`
-      : (results.find((item) => item?.message)?.message || '새 채팅 탭 전송에 실패했습니다.'),
+    rateLimited: stoppedByRateLimit,
+    message: stoppedByRateLimit
+      ? (sent.length > 0
+        ? `ChatGPT 탭 ${sent.length}개 전송 후 요청 제한 감지로 중단했습니다. 잠시 후 다시 시도해 주세요.`
+        : (firstFailure?.message || 'ChatGPT 요청 제한이 감지되었습니다. 잠시 후 다시 시도해 주세요.'))
+      : (sent.length > 0
+        ? `기존 ChatGPT 탭 ${Math.min(sent.length, reusedCount)}개 재사용, 새 탭 ${createdTabs.length}개 생성 후 전송 요청 완료`
+        : (firstFailure?.message || 'ChatGPT 탭 전송에 실패했습니다.')),
   };
 }
 function pIdleQueryState(idleSec) {
@@ -716,7 +1487,8 @@ function pIdleQueryState(idleSec) {
 }
 function clearBadgesForAllTabs() {
   actionStateCache = {};
-  // 배지 OFF 시, "이전에 이미 찍혀 있던" 배지도 남지 않도록 전체 탭 기준으로 지움
+  // Chrome 확장 아이콘 위의 작은 색 배지는 쓰지 않는다.
+  safeActionCall(chrome.action.setBadgeText({ text: '' }));
   chrome.tabs.query({}, (tabs) => {
     for (const t of tabs) {
       if (!t || typeof t.id !== 'number') continue;
@@ -725,7 +1497,7 @@ function clearBadgesForAllTabs() {
   });
 }
 function refreshTrackedTabs() {
-  // 현재 상태를 알고 있는 탭(= tabStates)에 대해서만 아이콘/배지를 다시 반영
+  // 현재 상태를 알고 있는 탭(= tabStates)에 대해서만 아이콘을 다시 반영
   for (const id of Object.keys(tabStates)) {
     const tabId = parseInt(id, 10);
     if (!Number.isFinite(tabId)) continue;
@@ -772,6 +1544,7 @@ chrome.storage.local.get([
   STORAGE_KEYS.QUIET_HOURS_START,
   STORAGE_KEYS.QUIET_HOURS_END,
   STORAGE_KEYS.CUSTOM_TAB_TITLES,
+  STORAGE_KEYS.CHATGPT_RATE_LIMIT_UNTIL,
 ], (res) => {
   if (typeof res[STORAGE_KEYS.DND_MODE] === 'boolean') settings.dndMode = res[STORAGE_KEYS.DND_MODE];
   if (typeof res[STORAGE_KEYS.BADGE_ENABLED] === 'boolean') settings.badgeEnabled = res[STORAGE_KEYS.BADGE_ENABLED];
@@ -794,13 +1567,16 @@ chrome.storage.local.get([
   if (res[STORAGE_KEYS.GEMINI_PROBE_IDLE_SEC] != null) settings.geminiProbeIdleSec = clampInt(res[STORAGE_KEYS.GEMINI_PROBE_IDLE_SEC], 60, 15, 3600);
   if (res[STORAGE_KEYS.GEMINI_PROBE_MIN_ORANGE_SEC] != null) settings.geminiProbeMinOrangeSec = clampInt(res[STORAGE_KEYS.GEMINI_PROBE_MIN_ORANGE_SEC], 12, 3, 600);
   if (res[STORAGE_KEYS.NOTIFICATION_SNOOZE_UNTIL] != null) settings.notificationSnoozeUntil = clampInt(res[STORAGE_KEYS.NOTIFICATION_SNOOZE_UNTIL], 0, 0, Number.MAX_SAFE_INTEGER);
+  if (res[STORAGE_KEYS.CHATGPT_RATE_LIMIT_UNTIL] != null) chatGptNewChatRateLimitUntil = clampInt(res[STORAGE_KEYS.CHATGPT_RATE_LIMIT_UNTIL], 0, 0, Number.MAX_SAFE_INTEGER);
   completionHistoryCache = Array.isArray(res?.[STORAGE_KEYS.COMPLETION_HISTORY]) ? res[STORAGE_KEYS.COMPLETION_HISTORY].slice(0, COMPLETION_HISTORY_LIMIT) : [];
   if (typeof res[STORAGE_KEYS.QUIET_HOURS_ENABLED] === 'boolean') settings.quietHoursEnabled = !!res[STORAGE_KEYS.QUIET_HOURS_ENABLED];
   if (res[STORAGE_KEYS.QUIET_HOURS_START] != null) settings.quietHoursStart = normalizeClockTime(res[STORAGE_KEYS.QUIET_HOURS_START], '23:00');
   if (res[STORAGE_KEYS.QUIET_HOURS_END] != null) settings.quietHoursEnd = normalizeClockTime(res[STORAGE_KEYS.QUIET_HOURS_END], '08:00');
   customTabTitles = normalizeCustomTabTitlesMap(res?.[STORAGE_KEYS.CUSTOM_TAB_TITLES]);
   lastPersistedCustomTabTitlesSignature = JSON.stringify(customTabTitles);
-  if (settings.badgeEnabled === false) clearBadgesForAllTabs();
+  settings.badgeEnabled = false;
+  settings.badgeCountEnabled = false;
+  clearBadgesForAllTabs();
   ensureGeminiProbeAlarm();
 });
 // 설정 변경 감지 (Popup에서 변경 시)
@@ -819,16 +1595,12 @@ chrome.storage.onChanged.addListener((changes) => {
     dashboardRelevantChanged = true;
   }
   if (changes[STORAGE_KEYS.BADGE_ENABLED]) {
-    settings.badgeEnabled = changes[STORAGE_KEYS.BADGE_ENABLED].newValue;
-    if (settings.badgeEnabled === false) {
-      clearBadgesForAllTabs();
-    } else {
-      refreshTrackedTabs();
-    }
+    settings.badgeEnabled = false;
+    clearBadgesForAllTabs();
   }
   if (changes[STORAGE_KEYS.BADGE_COUNT_ENABLED]) {
-    settings.badgeCountEnabled = !!changes[STORAGE_KEYS.BADGE_COUNT_ENABLED].newValue;
-    refreshTrackedTabs();
+    settings.badgeCountEnabled = false;
+    clearBadgesForAllTabs();
   }
   if (changes[STORAGE_KEYS.COMPLETION_HISTORY_ENABLED]) {
     settings.completionHistoryEnabled = !!changes[STORAGE_KEYS.COMPLETION_HISTORY_ENABLED].newValue;
@@ -1083,56 +1855,16 @@ async function emitBatchCompletionAlert({ peakOrangeCount }) {
   }
 }
 function updateIcon(tabId) {
-  const tabState = tabStates[tabId] || {};
-  const state = tabState.status || 'WHITE';
-  const steeringQueueCount = Math.max(0, Number(tabState.steeringQueueCount) || 0);
-  // 아이콘은 기존 리소스를 재사용(뱃지 색으로 구분이 핵심)
-  let iconPath = 'assets/bell_unread.png';
-  const computedBadgeText = steeringQueueCount > 0 ? (steeringQueueCount > 99 ? '99+' : String(steeringQueueCount)) : '1';
-  let badgeText = settings.badgeCountEnabled === false ? ' ' : computedBadgeText;
-  let badgeBg = '#7CFC00';
-  let badgeFg = steeringQueueCount > 0 ? '#000000' : '#7CFC00';
-  switch (state) {
-    case 'ORANGE':
-      iconPath = 'assets/bell_pending.png';
-      badgeBg = '#FFA500';
-      badgeFg = steeringQueueCount > 0 ? '#FFFFFF' : '#FFA500';
-      break;
-    case 'GREEN':
-      iconPath = 'assets/bell_profile.png';
-      badgeBg = '#FFFFFF';
-      badgeFg = steeringQueueCount > 0 ? '#000000' : '#FFFFFF';
-      break;
-    case 'WHITE':
-    default:
-      iconPath = 'assets/bell_unread.png';
-      badgeBg = '#7CFC00'; // 연두
-      badgeFg = steeringQueueCount > 0 ? '#000000' : '#7CFC00';
-      break;
-  }
+  // Chrome 툴바/확장프로그램 메인 아이콘은 흰색 AI 아이콘 하나만 쓴다.
+  const iconPath = 'assets/bell_profile.png';
   const signature = JSON.stringify({
     iconPath,
-    badgeEnabled: !!settings.badgeEnabled,
-    badgeCountEnabled: !!settings.badgeCountEnabled,
-    badgeText: settings.badgeEnabled ? badgeText : '',
-    badgeBg: settings.badgeEnabled ? badgeBg : '',
-    badgeFg: settings.badgeEnabled ? badgeFg : '',
+    badgeText: '',
   });
   if (actionStateCache[tabId] === signature) return;
   actionStateCache[tabId] = signature;
-  // 아이콘 및 배지 적용
   safeActionCall(chrome.action.setIcon({ path: iconPath, tabId: tabId }));
-  if (!settings.badgeEnabled) {
-    safeActionCall(chrome.action.setBadgeText({ text: '', tabId: tabId }));
-    return;
-  }
-  safeActionCall(chrome.action.setBadgeText({ text: badgeText, tabId: tabId }));
-  safeActionCall(chrome.action.setBadgeBackgroundColor({ color: badgeBg, tabId: tabId }));
-  if (chrome.action.setBadgeTextColor) {
-    try {
-      safeActionCall(chrome.action.setBadgeTextColor({ color: badgeFg, tabId: tabId }));
-    } catch (_) {}
-  }
+  safeActionCall(chrome.action.setBadgeText({ text: '', tabId: tabId }));
 }
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.action === 'test_alert_sound') {
@@ -1443,6 +2175,15 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if ('title' in changeInfo || 'url' in changeInfo || 'discarded' in changeInfo || 'status' in changeInfo) {
     bumpDashboardVersion();
   }
+  if (changeInfo.status === 'complete' || changeInfo.url) {
+    const candidate = { ...prevMeta, ...(tab || {}), id: tabId, url: tab?.url || changeInfo.url || prevMeta.url || '' };
+    if (isMonitoredUrl(candidate.url || '')) {
+      safeActionCall((async () => {
+        const ready = await ensureContentScripts(candidate);
+        if (ready) await pTabsSendMessage(tabId, { action: 'force_check', reason: changeInfo.status === 'complete' ? 'tab_complete' : 'tab_url' });
+      })());
+    }
+  }
 });
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
   for (const id of Object.keys(tabMetaCache)) {
@@ -1451,6 +2192,12 @@ chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
     }
   }
   bumpDashboardVersion();
+  safeActionCall((async () => {
+    const tab = await pTabsGet(tabId);
+    if (!tab?.id || !isMonitoredUrl(tab.url || '')) return;
+    const ready = await ensureContentScripts(tab);
+    if (ready) await pTabsSendMessage(tabId, { action: 'force_check', reason: 'tab_activated' });
+  })());
 });
 // 알림 클릭 시 해당 탭으로 이동
 chrome.notifications.onClicked.addListener((notificationId) => {
