@@ -261,7 +261,7 @@ try {
         try { sendResponse?.({ ok: false, message: '후속 지시 기능이 꺼져 있습니다.' }); } catch (_) {}
         return;
       }
-      const item = enqueueSteeringPrompt(text, { images: [] });
+      const item = enqueueSteeringPrompt(text, { files: [] });
       if (!item) {
         try { sendResponse?.({ ok: false, message: '대기열 추가 실패' }); } catch (_) {}
         return;

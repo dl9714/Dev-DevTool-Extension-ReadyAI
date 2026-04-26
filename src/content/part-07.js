@@ -19,7 +19,8 @@ function findAttachmentRevealButton(composer) {
       if (/(send|전송|stop|중지|cancel|abort|voice|mic)/.test(hay)) continue;
       let score = 0;
       if (/(attach|첨부)/.test(hay)) score += 4;
-      if (/(upload|업로드|image|photo|gallery|이미지|사진)/.test(hay)) score += 3;
+      if (/(upload|업로드|file|document|첨부|파일)/.test(hay)) score += 4;
+      if (/(image|photo|gallery|이미지|사진)/.test(hay)) score += 2;
       if (/(plus|add|추가)/.test(hay)) score += 1;
       if (score > bestScore) {
         best = btn;
@@ -30,30 +31,30 @@ function findAttachmentRevealButton(composer) {
   }
   return bestScore >= 4 ? best : null;
 }
-async function attachSteeringImagesViaFileInput(composer, imageItems) {
-  if (!Array.isArray(imageItems) || !imageItems.length) return { ok: true, attachedCount: 0, message: '' };
-  let input = findNearbyFileInput(composer);
+async function attachSteeringFilesViaFileInput(composer, attachmentItems) {
+  if (!Array.isArray(attachmentItems) || !attachmentItems.length) return { ok: true, attachedCount: 0, message: '' };
+  const files = attachmentItems.map((item) => item?.file).filter((file) => isSteeringAttachmentFile(file));
+  if (!files.length) return { ok: true, attachedCount: 0, message: '' };
+  let input = findNearbyFileInput(composer, files);
   if (!input) {
     const revealButton = findAttachmentRevealButton(composer);
     if (revealButton) {
       try { revealButton.click(); } catch (_) {}
       await waitForSteeringTick(180);
-      input = findNearbyFileInput(composer);
+      input = findNearbyFileInput(composer, files);
     }
   }
   if (!input) {
-    return { ok: false, attachedCount: 0, message: '이 사이트에서 이미지 업로드 입력을 찾지 못했습니다.' };
+    return { ok: false, attachedCount: 0, message: '이 사이트에서 파일 업로드 입력을 찾지 못했습니다.' };
   }
-  const files = imageItems.map((item) => item?.file).filter(Boolean);
-  if (!files.length) return { ok: true, attachedCount: 0, message: '' };
   const usableFiles = input.multiple ? files : files.slice(0, 1);
   let fileList;
   try { fileList = createFileListFromFiles(usableFiles); } catch (_) { fileList = null; }
   if (!fileList || !fileList.length) {
-    return { ok: false, attachedCount: 0, message: '이미지 파일 목록을 만들지 못했습니다.' };
+    return { ok: false, attachedCount: 0, message: '파일 목록을 만들지 못했습니다.' };
   }
   try { input.files = fileList; } catch (_) {
-    return { ok: false, attachedCount: 0, message: '이미지를 업로드 입력에 넣지 못했습니다.' };
+    return { ok: false, attachedCount: 0, message: '파일을 업로드 입력에 넣지 못했습니다.' };
   }
   try { input.dispatchEvent(new Event('input', { bubbles: true, cancelable: true })); } catch (_) {}
   try { input.dispatchEvent(new Event('change', { bubbles: true, cancelable: true })); } catch (_) {}
@@ -61,8 +62,11 @@ async function attachSteeringImagesViaFileInput(composer, imageItems) {
   return {
     ok: true,
     attachedCount: usableFiles.length,
-    message: usableFiles.length < files.length ? `이미지 ${usableFiles.length}개만 업로드했습니다.` : `이미지 ${usableFiles.length}개 업로드 준비됨`,
+    message: usableFiles.length < files.length ? `파일 ${usableFiles.length}개만 업로드했습니다.` : `파일 ${usableFiles.length}개 업로드 준비됨`,
   };
+}
+async function attachSteeringImagesViaFileInput(composer, imageItems) {
+  return attachSteeringFilesViaFileInput(composer, imageItems);
 }
 function getSteeringAttachmentUploadScope(composer) {
   const form = getComposerSubmitForm(composer);
@@ -144,7 +148,7 @@ async function waitForSteeringAttachmentUploadReady(composer, options = {}) {
   return {
     ok: false,
     retryable: true,
-    message: sawPending || sawDisabledSend ? '이미지 업로드가 아직 끝나지 않았습니다.' : '이미지 업로드 완료 상태를 확인하지 못했습니다.',
+    message: sawPending || sawDisabledSend ? '파일 업로드가 아직 끝나지 않았습니다.' : '파일 업로드 완료 상태를 확인하지 못했습니다.',
     waitedMs: Date.now() - startedAt,
     sawPending,
     sawDisabledSend,
@@ -170,21 +174,24 @@ async function sendSteeringPromptText(text, options = {}) {
   if (!composer) {
     return { ok: false, sent: false, retryable: true, message: '입력창이 아직 준비되지 않았습니다.' };
   }
-  const images = Array.isArray(options.images) ? options.images.filter((item) => item?.file) : [];
-  if (images.length) {
-    const attached = await attachSteeringImagesViaFileInput(composer, images);
+  const files = (Array.isArray(options.files) ? options.files : (Array.isArray(options.images) ? options.images : [])).filter((item) => item?.file);
+  if (files.length) {
+    setSteeringStatus(`파일 ${files.length}개 업로드 준비 중...`);
+    const attached = await attachSteeringFilesViaFileInput(composer, files);
     if (!attached.ok) {
-      return { ok: false, sent: false, retryable: false, message: attached.message || '이미지를 업로드하지 못했습니다.' };
+      return { ok: false, sent: false, retryable: false, message: attached.message || '파일을 업로드하지 못했습니다.' };
     }
-    const uploadReady = await waitForSteeringAttachmentUploadReady(composer, { imageCount: images.length });
+    setSteeringStatus(attached.message || `파일 ${files.length}개 업로드 대기 중`);
+    const uploadReady = await waitForSteeringAttachmentUploadReady(composer, { fileCount: files.length });
     if (!uploadReady.ok) {
       return {
         ok: false,
         sent: false,
         retryable: !!uploadReady.retryable,
-        message: uploadReady.message || '이미지 업로드가 끝날 때까지 기다리는 중입니다.',
+        message: uploadReady.message || '파일 업로드가 끝날 때까지 기다리는 중입니다.',
       };
     }
+    setSteeringStatus(text ? '파일 업로드 완료 · 문구 전송 중' : '파일 업로드 완료 · 전송 중');
   }
   suppressComposerAcknowledge(1700);
   const existingText = options.replaceComposerText ? '' : getCurrentComposerText(composer);
@@ -203,7 +210,7 @@ async function sendSteeringPromptText(text, options = {}) {
       }
     }
     await waitForSteeringTick(140);
-  } else if (!images.length) {
+  } else if (!files.length) {
     return { ok: false, sent: false, message: '보낼 내용이 없습니다.' };
   } else {
     await waitForSteeringTick(180);
@@ -307,6 +314,7 @@ async function sendSteeringPromptTextWhenReady(text, options = {}) {
       lastMessage = '전송 가능 상태를 기다리는 중입니다.';
     } else {
       const result = await sendSteeringPromptText(value, {
+        files: [],
         images: [],
         replaceComposerText: options.source === 'new_chat_tab',
         submitStartTimeoutMs: Math.max(1200, Number(options.submitStartTimeoutMs) || 3500),
@@ -348,7 +356,7 @@ async function processSteeringQueue(options = {}) {
   steeringProcessing = true;
   updateSteeringUi();
   try {
-    const result = await sendSteeringPromptText(current.text, { images: current.images || [] });
+    const result = await sendSteeringPromptText(current.text, { files: getSteeringQueueAttachments(current) });
     if (!result.ok || !result.sent) {
       if (result.retryable) {
         current.retryCount = Math.max(0, Number(current.retryCount) || 0) + 1;
@@ -385,7 +393,7 @@ async function processSteeringQueue(options = {}) {
 function submitSteeringInputToNewChats() {
   const refs = ensureSteeringUi();
   const text = String(refs?.input?.value || '').trim();
-  const imageCount = getSteeringDraftAttachmentCount();
+  const fileCount = getSteeringDraftAttachmentCount();
   const getRequestFailureMessage = (errorMessage) => {
     const message = String(errorMessage || '').trim();
     if (/extension context invalidated|context invalidated|receiving end does not exist|could not establish connection|message port closed/i.test(message)) {
@@ -410,8 +418,8 @@ function submitSteeringInputToNewChats() {
     try { refs?.input?.focus(); } catch (_) {}
     return false;
   }
-  if (imageCount > 0) {
-    setSteeringStatus('새 채팅 탭 전송은 텍스트만 지원합니다. 이미지는 현재 대화로 전송해 주세요.', true);
+  if (fileCount > 0) {
+    setSteeringStatus('새 채팅 탭 전송은 텍스트만 지원합니다. 파일 첨부는 현재 대화로 전송해 주세요.', true);
     return false;
   }
   const count = normalizeSteeringNewChatTabCount(refs?.newChatCount?.value || steeringNewChatTabCount);
@@ -457,19 +465,22 @@ function submitSteeringInputToNewChats() {
   return true;
 }
 function submitSteeringInput() {
-  if (steeringAdvancedEnabled) {
+  const refs = ensureSteeringUi();
+  const text = String(refs?.input?.value || '').trim();
+  const files = cloneSteeringAttachmentsForQueue();
+  if (steeringAdvancedEnabled && !files.length) {
     submitSteeringInputToNewChats();
     return;
   }
-  const refs = ensureSteeringUi();
-  const text = String(refs?.input?.value || '').trim();
-  const images = cloneSteeringImagesForQueue();
-  if (!text && !images.length) {
-    setSteeringStatus('후속 지시나 이미지를 준비해주세요.', true);
+  if (steeringAdvancedEnabled && files.length) {
+    setSteeringStatus('파일 첨부는 현재 대화로 전송합니다.');
+  }
+  if (!text && !files.length) {
+    setSteeringStatus('후속 지시나 파일을 준비해주세요.', true);
     try { refs?.input?.focus(); } catch (_) {}
     return;
   }
-  enqueueSteeringPrompt(text, { images });
+  enqueueSteeringPrompt(text, { files });
   setSteeringDraftText('');
   try { refs.input.value = ''; } catch (_) {}
   clearSteeringDraftAttachments();

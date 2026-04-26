@@ -64,7 +64,7 @@ function clearTitleBadge() {
   try { document.title = cleanTitle; } catch (_) {}
 }
 var STEERING_AUTO_SEND_DELAY_MS = 1000;
-var READY_AI_CONTENT_VERSION = '2026-04-26-new-chat-reuse-v9';
+var READY_AI_CONTENT_VERSION = '2026-04-26-file-folder-polish-v11';
 try {
   var existingSteeringHost = document.getElementById('ready-ai-steering-host');
   if (existingSteeringHost) existingSteeringHost.remove();
@@ -116,8 +116,10 @@ var steeringAutoSendTimer = null;
 var steeringSendLock = false;
 var steeringSendLockTimer = null;
 var steeringProcessing = false;
-var STEERING_IMAGE_LIMIT = 8;
-var STEERING_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+var STEERING_ATTACHMENT_LIMIT = 8;
+var STEERING_FILE_MAX_BYTES = 50 * 1024 * 1024;
+var STEERING_IMAGE_LIMIT = STEERING_ATTACHMENT_LIMIT; // 기존 내부 호출 호환용
+var STEERING_IMAGE_MAX_BYTES = STEERING_FILE_MAX_BYTES;
 var STEERING_IMAGE_OPTIMIZE_TARGET_BYTES = 6 * 1024 * 1024;
 var STEERING_IMAGE_OPTIMIZE_MAX_DIMENSION = 2400;
 var steeringAttachments = [];
@@ -231,7 +233,7 @@ function commitSteeringQueueEdit() {
   const nextText = String(steeringQueueEditingText || '').trim();
   steeringQueue = steeringQueue.map((entry) => entry?.id === item.id ? { ...entry, text: nextText } : entry);
   cancelSteeringQueueEdit({ silent: true });
-  setSteeringStatus(nextText ? '대기를 수정했습니다.' : (getSteeringItemAttachmentCount(item) ? '이미지 대기를 수정했습니다.' : '빈 대기로 변경했습니다.'));
+  setSteeringStatus(nextText ? '대기를 수정했습니다.' : (getSteeringItemAttachmentCount(item) ? '파일 첨부 대기를 수정했습니다.' : '빈 대기로 변경했습니다.'));
   updateSteeringUi();
   return true;
 }

@@ -285,6 +285,21 @@ function updateSummaryText(id, text) {
   const el = $(id);
   if (el) el.textContent = text;
 }
+function setToneClass(id, baseClass, tone) {
+  const el = $(id);
+  if (!el) return;
+  const tones = ['is-idle', 'is-running', 'is-done', 'is-muted', 'is-info', 'is-positive'];
+  tones.forEach((name) => el.classList.remove(name));
+  if (tone) el.classList.add(`is-${tone}`);
+  if (baseClass && !el.classList.contains(baseClass)) el.classList.add(baseClass);
+}
+function setMainStatusTone({ dndMode, snoozed, quiet, greenCount, orangeCount }) {
+  let tone = 'idle';
+  if (dndMode || snoozed || quiet) tone = 'muted';
+  else if (greenCount > 0) tone = 'done';
+  else if (orangeCount > 0) tone = 'running';
+  setToneClass('main-status-badge', 'status-badge', tone);
+}
 function setHidden(id, hidden) {
   const el = $(id);
   if (el) el.classList.toggle('hidden', !!hidden);
@@ -940,7 +955,7 @@ async function renderTitleManager(cfg, options = {}) {
   }
   sorted.forEach((item) => {
     const row = document.createElement('div');
-    row.className = 'title-manager-row';
+    row.className = `title-manager-row is-${statusClass(item.status)}`;
     const top = document.createElement('div');
     top.className = 'title-manager-top';
     const left = document.createElement('div');
@@ -1093,6 +1108,11 @@ function refreshSummary(cfg) {
   updateSummaryText('main-chip-site', `사이트 ${builtinEnabledCount + customEnabledCount}`);
   updateSummaryText('main-chip-template', `템플릿 ${templateCount}`);
   updateSummaryText('main-chip-quiet', snoozed ? '스누즈 적용' : (cfg.quietHoursEnabled ? getQuietHoursLabel(cfg) : '조용한 시간 꺼짐'));
+  setMainStatusTone({ dndMode: !!cfg.dndMode, snoozed, quiet, greenCount, orangeCount });
+  setToneClass('main-chip-alert', 'quick-chip', (!alertEnabled || cfg.dndMode || snoozed || quiet) ? 'muted' : 'positive');
+  setToneClass('main-chip-site', 'quick-chip', (builtinEnabledCount + customEnabledCount) > 0 ? 'info' : 'muted');
+  setToneClass('main-chip-template', 'quick-chip', templateCount > 0 ? 'info' : 'muted');
+  setToneClass('main-chip-quiet', 'quick-chip', (snoozed || quiet) ? 'muted' : 'info');
   updateSummaryText('quick-dnd-sub', cfg.dndMode ? '완료 팝업 숨김' : '완료 팝업 표시');
   updateSummaryText('quick-steering-sub', cfg.steeringEnabled ? (cfg.steeringAdvancedEnabled ? `새 채팅 ${normalizeSteeringNewChatTabCount(cfg.steeringNewChatTabCount)}탭` : `${cfg.steeringTheme === 'light' ? '라이트' : '다크'} 패널`) : '런처 꺼짐');
   updateSummaryText('quick-quiet-sub', cfg.quietHoursEnabled ? `${getQuietHoursLabel(cfg)}${quiet ? ' · 지금 적용' : ''}` : '사용 안 함');
@@ -1144,6 +1164,8 @@ function openSheet(sheetId) {
     target.classList.add('active');
     const scroller = target.querySelector('.sheet-scroll');
     if (scroller) scroller.scrollTop = 0;
+    const closeButton = target.querySelector('[data-close-sheet]');
+    if (closeButton && typeof closeButton.focus === 'function') setTimeout(() => closeButton.focus(), 0);
   }
   if (sheetId === 'title-manager-sheet' && currentPopupConfig) {
     refreshRuntimeDashboard(currentPopupConfig, true, { force: true }).then(() => {
@@ -1477,7 +1499,7 @@ function renderDashboardData(data, cfg) {
         const frag = document.createDocumentFragment();
         visibleItems.forEach((item) => {
           const row = document.createElement('div');
-          row.className = 'dash-row';
+          row.className = `dash-row is-${statusClass(item.status)}`;
           const top = document.createElement('div');
           top.className = 'dash-top';
           const left = document.createElement('div');

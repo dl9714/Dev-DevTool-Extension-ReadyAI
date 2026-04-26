@@ -206,7 +206,10 @@ function getSteeringStateLabel() {
   return `${name} 후속 지시`;
 }
 function getSteeringPrimaryLabel() {
-  if (steeringAdvancedEnabled) return '새 채팅';
+  if (steeringAdvancedEnabled) {
+    const hasFiles = typeof getSteeringDraftAttachmentCount === 'function' && getSteeringDraftAttachmentCount() > 0;
+    return hasFiles ? '현재대화' : '새 채팅';
+  }
   return canAutoSendSteeringNow() ? 'Enter' : '입력대기';
 }
 function setSteeringAdvancedEnabled(nextValue) {

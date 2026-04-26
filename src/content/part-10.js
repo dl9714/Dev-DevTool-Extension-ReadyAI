@@ -25,16 +25,16 @@ var STEERING_UI_MARKUP_TEMPLATE = `
         <div class="title-edit-card">
           <div class="title-edit-head">
             <span class="title-edit-label"><span class="title-label-badge" aria-hidden="true">🟢</span><span>크롬 탭 이름변경</span></span>
+            <div class="title-meta" id="ready-ai-steering-tab-title-meta">크롬 탭 이름 자동</div>
           </div>
           <div class="title-edit">
             <input class="title-input" id="ready-ai-steering-tab-title-input" type="text" maxlength="80" placeholder="변경할 크롬 탭 이름 입력" />
             <button class="title-btn" type="button" id="ready-ai-steering-tab-title-save">이름 변경</button>
             <button class="title-btn subtle" type="button" id="ready-ai-steering-tab-title-clear">해제</button>
           </div>
-          <div class="title-meta" id="ready-ai-steering-tab-title-meta">크롬 탭 이름 자동</div>
         </div>
-        <textarea class="input" id="ready-ai-steering-input" placeholder="후속 지시 입력 · 이미지 드래그 가능"></textarea>
-        <div class="drop-shield" id="ready-ai-steering-drop-shield" hidden>여기에 놓으면 이미지 첨부</div>
+        <textarea class="input" id="ready-ai-steering-input" placeholder="후속 지시 입력 · 파일/폴더 드래그 가능"></textarea>
+        <div class="drop-shield" id="ready-ai-steering-drop-shield" hidden>여기에 놓으면 파일 첨부</div>
         <div class="template-wrap" id="ready-ai-steering-template-wrap">
           <div class="template-head">
             <div class="template-label">대기 템플릿</div>
@@ -44,14 +44,19 @@ var STEERING_UI_MARKUP_TEMPLATE = `
         </div>
         <div class="attachment-wrap" id="ready-ai-steering-attachment-wrap">
           <div class="attachment-top">
-            <div class="attachment-meta-line" id="ready-ai-steering-attachment-meta">이미지를 드래그앤드롭하여 추가</div>
+            <div class="attachment-meta-line" id="ready-ai-steering-attachment-meta">파일 또는 이미지를 드래그앤드롭하여 추가</div>
             <div class="attachment-actions">
-              <button class="attachment-btn" type="button" id="ready-ai-steering-add-image">이미지 추가</button>
-              <button class="attachment-btn" type="button" id="ready-ai-steering-clear-images">이미지 비우기</button>
+              <button class="attachment-btn" type="button" id="ready-ai-steering-add-image">파일 추가</button>
+              <button class="attachment-btn" type="button" id="ready-ai-steering-clear-images">파일 비우기</button>
             </div>
           </div>
-          <input class="file-input" id="ready-ai-steering-image-file" type="file" accept="image/*" multiple />
+          <input class="file-input" id="ready-ai-steering-image-file" type="file" multiple />
+          <div class="attachment-dropzone" id="ready-ai-steering-attachment-dropzone">
+            <strong>파일을 여기로 드롭</strong>
+            <span>이미지·PDF·문서·압축파일, 폴더 드롭까지 지원</span>
+          </div>
           <div class="attachment-list" id="ready-ai-steering-attachment-list"></div>
+          <div class="attachment-hint" id="ready-ai-steering-attachment-hint">PDF·문서·이미지·압축파일 · 파일당 최대 50MB</div>
         </div>
         <div class="actions">
           <button class="btn" type="button" id="ready-ai-steering-primary">Enter</button>
@@ -76,19 +81,24 @@ var STEERING_UI_MARKUP_TEMPLATE = `
               <input id="ready-ai-steering-new-chat-count" type="text" inputmode="numeric" pattern="[1-8]" autocomplete="off" value="3" />
               <button class="advanced-btn" type="button" id="ready-ai-steering-new-chat-send">새 채팅으로 보내기</button>
             </div>
-            <div class="advanced-hint">기본 Enter도 고급설정 ON에서는 현재 대화가 아니라 새 채팅 탭으로 보냅니다. 이미지는 현재 대화 전송만 지원합니다.</div>
+            <div class="advanced-hint">고급설정 ON에서는 텍스트만 새 채팅 탭으로 보냅니다. 파일이 붙어 있으면 Enter가 현재 대화 전송으로 자동 전환됩니다.</div>
           </div>
         </div>
       </div>
       <div class="attachment-preview" id="ready-ai-steering-attachment-preview" hidden>
         <div class="attachment-preview-card">
           <div class="attachment-preview-head">
-            <div class="attachment-preview-title">이미지 미리보기</div>
+            <div class="attachment-preview-title" id="ready-ai-steering-attachment-preview-title">첨부 미리보기</div>
             <button class="attachment-preview-close" type="button" id="ready-ai-steering-attachment-preview-close" aria-label="닫기">×</button>
           </div>
           <div class="attachment-preview-body">
             <button class="attachment-preview-nav" type="button" id="ready-ai-steering-attachment-preview-prev">‹</button>
             <img class="attachment-preview-image" id="ready-ai-steering-attachment-preview-image" alt="preview" />
+            <div class="attachment-preview-file" id="ready-ai-steering-attachment-preview-file" hidden>
+              <div class="attachment-preview-file-icon" id="ready-ai-steering-attachment-preview-file-icon">FILE</div>
+              <div class="attachment-preview-file-name" id="ready-ai-steering-attachment-preview-file-name"></div>
+              <div class="attachment-preview-file-hint" id="ready-ai-steering-attachment-preview-file-hint"></div>
+            </div>
             <button class="attachment-preview-nav" type="button" id="ready-ai-steering-attachment-preview-next">›</button>
           </div>
           <div class="attachment-preview-meta" id="ready-ai-steering-attachment-preview-meta"></div>
@@ -159,12 +169,19 @@ function buildSteeringRefs() {
     templateList: steeringRoot.getElementById('ready-ai-steering-template-list'),
     attachmentWrap: steeringRoot.getElementById('ready-ai-steering-attachment-wrap'),
     attachmentMeta: steeringRoot.getElementById('ready-ai-steering-attachment-meta'),
+    attachmentDropzone: steeringRoot.getElementById('ready-ai-steering-attachment-dropzone'),
     attachmentList: steeringRoot.getElementById('ready-ai-steering-attachment-list'),
+    attachmentHint: steeringRoot.getElementById('ready-ai-steering-attachment-hint'),
     addImage: steeringRoot.getElementById('ready-ai-steering-add-image'),
     clearAttachments: steeringRoot.getElementById('ready-ai-steering-clear-images'),
     fileInput: steeringRoot.getElementById('ready-ai-steering-image-file'),
     attachmentPreview: steeringRoot.getElementById('ready-ai-steering-attachment-preview'),
+    attachmentPreviewTitle: steeringRoot.getElementById('ready-ai-steering-attachment-preview-title'),
     attachmentPreviewImage: steeringRoot.getElementById('ready-ai-steering-attachment-preview-image'),
+    attachmentPreviewFile: steeringRoot.getElementById('ready-ai-steering-attachment-preview-file'),
+    attachmentPreviewFileIcon: steeringRoot.getElementById('ready-ai-steering-attachment-preview-file-icon'),
+    attachmentPreviewFileName: steeringRoot.getElementById('ready-ai-steering-attachment-preview-file-name'),
+    attachmentPreviewFileHint: steeringRoot.getElementById('ready-ai-steering-attachment-preview-file-hint'),
     attachmentPreviewMeta: steeringRoot.getElementById('ready-ai-steering-attachment-preview-meta'),
     attachmentPreviewClose: steeringRoot.getElementById('ready-ai-steering-attachment-preview-close'),
     attachmentPreviewPrev: steeringRoot.getElementById('ready-ai-steering-attachment-preview-prev'),
@@ -217,7 +234,7 @@ function bindSteeringUiEvents() {
   }));
   steeringRefs.clearAttachments?.addEventListener('click', consume(() => {
     clearSteeringDraftAttachments();
-    setSteeringStatus('이미지를 모두 비웠습니다.');
+    setSteeringStatus('파일을 모두 비웠습니다.');
     updateSteeringUi();
   }));
   steeringRefs.fileInput?.addEventListener('change', async (event) => {
@@ -372,9 +389,9 @@ function bindSteeringUiEvents() {
   steeringRefs.sendNow.addEventListener('click', consume(async () => {
     const refs = ensureSteeringUi();
     const text = String(refs?.input?.value || '').trim();
-    const images = cloneSteeringImagesForQueue();
-    if (text || images.length) {
-      enqueueSteeringPrompt(text, { images });
+    const files = cloneSteeringAttachmentsForQueue();
+    if (text || files.length) {
+      enqueueSteeringPrompt(text, { files });
       setSteeringDraftText('');
       try { refs.input.value = ''; } catch (_) {}
       clearSteeringDraftAttachments();
@@ -444,17 +461,17 @@ function bindSteeringUiEvents() {
     stopSteeringDragEvent(event);
     setSteeringDragActive(false);
     armSteeringDropPointerGuard();
-    const files = extractImageFilesFromTransfer(event.dataTransfer);
+    const files = await extractSteeringFilesFromTransferAsync(event.dataTransfer, { limit: Math.max(64, STEERING_ATTACHMENT_LIMIT * 4) });
     await addSteeringAttachments(files);
   };
-  [steeringRefs.card, steeringRefs.attachmentWrap, steeringRefs.input, steeringRefs.dropShield].forEach((target) => {
+  [steeringRefs.card, steeringRefs.attachmentWrap, steeringRefs.attachmentDropzone, steeringRefs.input, steeringRefs.dropShield].forEach((target) => {
     target?.addEventListener('dragenter', handleSteeringAttachmentDragEnter, true);
     target?.addEventListener('dragover', handleSteeringAttachmentDragOver, true);
     target?.addEventListener('dragleave', handleSteeringAttachmentDragLeave, true);
     target?.addEventListener('drop', handleSteeringAttachmentDrop, true);
   });
   steeringRefs.input.addEventListener('paste', async (event) => {
-    const files = extractImageFilesFromTransfer(event.clipboardData);
+    const files = await extractSteeringFilesFromTransferAsync(event.clipboardData, { limit: Math.max(64, STEERING_ATTACHMENT_LIMIT * 4) });
     if (!files.length) return;
     try { event.preventDefault(); } catch (_) {}
     try { event.stopPropagation(); } catch (_) {}

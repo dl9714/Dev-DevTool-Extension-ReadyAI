@@ -62,7 +62,7 @@ const CHATGPT_NEW_CHAT_TAB_GAP_MS = 7_000;
 const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
-const READY_AI_CONTENT_VERSION = '2026-04-26-new-chat-reuse-v9';
+const READY_AI_CONTENT_VERSION = '2026-04-26-new-chat-reuse-v10';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
 const CONTENT_SCRIPT_FILES = Object.freeze([
   'src/sites.js',
@@ -221,11 +221,19 @@ function clearCustomTabTitleForTab(tabId) {
   bumpDashboardVersion();
   return true;
 }
+function sendCustomTabTitleMessage(tabId, message) {
+  if (!Number.isFinite(tabId) || tabId <= 0) return;
+  try {
+    chrome.tabs.sendMessage(tabId, message, { frameId: 0 }, () => {
+      try { void chrome.runtime.lastError; } catch (_) {}
+    });
+  } catch (_) {}
+}
 function notifyCustomTabTitleUpdated(tabId, title) {
-  notifyCustomTabTitleUpdated(tabId, title)
+  sendCustomTabTitleMessage(tabId, { action: 'custom_tab_title_updated', title: normalizeCustomTabTitleValue(title) });
 }
 function notifyCustomTabTitleCleared(tabId) {
-  notifyCustomTabTitleCleared(tabId)
+  sendCustomTabTitleMessage(tabId, { action: 'custom_tab_title_cleared' });
 }
 function setCustomTabTitlesForTabs(items) {
   const targets = Array.isArray(items) ? items : [];
@@ -830,7 +838,6 @@ async function waitForNewChatConversationSettled(tabId, text, timeoutMs = 26000)
     if (snapshot?.hasTarget) return { ok: true, tabId, url: href, settled: true };
     if (conversationUrl && snapshot?.hasTurns && !snapshot?.blank) return { ok: true, tabId, url: href, settled: true };
     if (conversationUrl && snapshot?.bodyTextLength > 120 && !snapshot?.blank) return { ok: true, tabId, url: href, settled: true };
-
     const looksBlank = !!snapshot?.blank || (conversationUrl && tab.status === 'complete' && (!snapshot || (snapshot.bodyTextLength < 40 && !snapshot.hasComposer && !snapshot.hasTurns)));
     if (looksBlank) {
       if (!blankSince) blankSince = Date.now();
@@ -1388,7 +1395,6 @@ async function openChatGptNewChatTabsForPrompt(message, sender) {
   const targetTabs = [];
   const results = [];
   let stoppedByRateLimit = false;
-
   const existingTabs = await pTabsQuery({});
   const sourceFromExisting = sourceTab?.id
     ? (existingTabs.find((tab) => tab?.id === sourceTab.id) || sourceTab)
@@ -1408,7 +1414,6 @@ async function openChatGptNewChatTabsForPrompt(message, sender) {
     if (targetTabs.length >= count) break;
     pushUniqueTab(targetTabs, tab);
   }
-
   while (targetTabs.length < count) {
     const activeLimit = await findChatGptRateLimitNotice();
     if (activeLimit) {
@@ -1431,7 +1436,6 @@ async function openChatGptNewChatTabsForPrompt(message, sender) {
     targetTabs.push(tab);
     await sleep(CHATGPT_NEW_CHAT_PREOPEN_GAP_MS);
   }
-
   for (let i = 0; i < targetTabs.length; i += 1) {
     const activeLimit = await findChatGptRateLimitNotice();
     if (activeLimit) {
@@ -1918,13 +1922,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, message: '탭 이름이 비어 있습니다.' });
       return;
     }
-    notifyCustomTabTitleUpdated(tabId, title)
+    notifyCustomTabTitleUpdated(tabId, title);
     sendResponse({ ok: true, title });
     return;
   }
   if (message.action === 'clear_custom_tab_title_for_tab') {
     clearCustomTabTitleForTab(tabId);
-    notifyCustomTabTitleCleared(tabId)
+    notifyCustomTabTitleCleared(tabId);
     sendResponse({ ok: true });
     return;
   }
@@ -1954,13 +1958,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, message: '탭 이름이 비어 있습니다.' });
       return;
     }
-    notifyCustomTabTitleUpdated(tabId, title)
+    notifyCustomTabTitleUpdated(tabId, title);
     sendResponse({ ok: true, title });
     return;
   }
   if (message.action === 'clear_custom_tab_title') {
     clearCustomTabTitleForTab(tabId);
-    notifyCustomTabTitleCleared(tabId)
+    notifyCustomTabTitleCleared(tabId);
     sendResponse({ ok: true });
     return;
   }

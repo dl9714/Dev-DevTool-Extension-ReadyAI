@@ -18,7 +18,6 @@ function ensureSteeringUi() {
   mountSteeringUi();
   return steeringRefs;
 }
-
 function acknowledgeCompletion() {
   if (!monitoring) return;
   if (isGenerating) return;
