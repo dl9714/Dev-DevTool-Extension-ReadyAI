@@ -44,7 +44,7 @@ var STEERING_UI_MARKUP_TEMPLATE = `
         </div>
         <div class="attachment-wrap" id="ready-ai-steering-attachment-wrap">
           <div class="attachment-top">
-            <div class="attachment-meta-line" id="ready-ai-steering-attachment-meta">파일 또는 이미지를 드래그앤드롭하여 추가</div>
+            <div class="attachment-meta-line" id="ready-ai-steering-attachment-meta">PDF·문서·이미지·압축 · 최대 50MB</div>
             <div class="attachment-actions">
               <button class="attachment-btn" type="button" id="ready-ai-steering-add-image">파일 추가</button>
               <button class="attachment-btn" type="button" id="ready-ai-steering-clear-images">파일 비우기</button>
@@ -53,10 +53,10 @@ var STEERING_UI_MARKUP_TEMPLATE = `
           <input class="file-input" id="ready-ai-steering-image-file" type="file" multiple />
           <div class="attachment-dropzone" id="ready-ai-steering-attachment-dropzone">
             <strong>파일을 여기로 드롭</strong>
-            <span>이미지·PDF·문서·압축파일, 폴더 드롭까지 지원</span>
+            <span>폴더 드롭 지원</span>
           </div>
           <div class="attachment-list" id="ready-ai-steering-attachment-list"></div>
-          <div class="attachment-hint" id="ready-ai-steering-attachment-hint">PDF·문서·이미지·압축파일 · 파일당 최대 50MB</div>
+          <div class="attachment-hint" id="ready-ai-steering-attachment-hint"></div>
         </div>
         <div class="actions">
           <button class="btn" type="button" id="ready-ai-steering-primary">Enter</button>

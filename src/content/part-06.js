@@ -17,7 +17,7 @@ function getSteeringAttachmentHintText(list = steeringAttachments) {
   const count = Array.isArray(list) ? list.length : 0;
   const remaining = Math.max(0, STEERING_ATTACHMENT_LIMIT - count);
   const maxSize = formatSteeringBytes(STEERING_FILE_MAX_BYTES);
-  if (!count) return `PDF·문서·이미지·압축파일 · 폴더 드롭 지원 · 파일당 최대 ${maxSize}`;
+  if (!count) return '';
   const modeHint = steeringAdvancedEnabled ? ' · 파일은 현재 대화로 전송' : '';
   return `남은 ${remaining}칸 · 파일당 최대 ${maxSize}${modeHint}`;
 }
@@ -25,7 +25,7 @@ function renderSteeringAttachments() {
   if (!steeringRefs?.attachmentWrap || !steeringRefs?.attachmentList || !steeringRefs?.attachmentMeta) return;
   const list = steeringAttachments.slice();
   const totalBytes = getSteeringAttachmentTotalBytes(list);
-  const metaText = list.length ? `파일 ${list.length}/${STEERING_ATTACHMENT_LIMIT} · 총 ${formatSteeringBytes(totalBytes)}` : '파일 또는 폴더를 드래그앤드롭하여 추가';
+  const metaText = list.length ? `파일 ${list.length}/${STEERING_ATTACHMENT_LIMIT} · 총 ${formatSteeringBytes(totalBytes)}` : `PDF·문서·이미지·압축 · 최대 ${formatSteeringBytes(STEERING_FILE_MAX_BYTES)}`;
   const hintText = getSteeringAttachmentHintText(list);
   const nextDisplay = (steeringPanelOpen || list.length) ? 'flex' : 'none';
   const signature = JSON.stringify({
