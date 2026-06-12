@@ -101,7 +101,6 @@ function applySteeringUiNow() {
   renderSteeringAttachments();
   syncSteeringAttachmentPreview();
   syncSteeringQueueCount();
-  clampSteeringHostToViewportTop();
   syncTitleBadgeFromUiRender(false);
   setSteeringDisplayIfChanged(steeringHost, (steeringPanelOpen || steeringLauncherVisible) ? 'block' : 'none');
 }

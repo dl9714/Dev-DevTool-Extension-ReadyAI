@@ -174,7 +174,7 @@ var STEERING_UI_STYLE_TEMPLATE_B = `
       }
       .card[data-advanced="true"] {
         width: min(430px, calc(100vw - 28px));
-        max-height: min(760px, calc(100vh - 32px));
+        max-height: var(--ready-ai-card-max-height, min(760px, calc(100vh - 32px)));
         overflow-y: auto;
         padding-bottom: 16px;
       }

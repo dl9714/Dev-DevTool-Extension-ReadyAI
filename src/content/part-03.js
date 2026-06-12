@@ -465,16 +465,20 @@ function getSteeringLayoutPositionKey() {
     steeringAdvancedEnabled ? 'advanced' : 'basic',
   ].join(':');
 }
-function clampSteeringHostToViewportTop(minTop = 12) {
+function applySteeringViewportSizeVars(bottomPx = 140) {
   if (!steeringHost) return;
   try {
-    const rect = steeringHost.getBoundingClientRect();
-    if (!rect || rect.top >= minTop) return;
-    const currentBottom = Number.parseFloat(steeringHost.style.bottom || '0');
-    if (!Number.isFinite(currentBottom)) return;
-    const overflow = Math.ceil(minTop - rect.top);
-    const nextBottom = Math.max(12, Math.round(currentBottom - overflow));
-    if (nextBottom !== currentBottom) steeringHost.style.bottom = `${nextBottom}px`;
+    const viewportHeight = Math.max(420, Number(window.innerHeight) || 0);
+    const bottom = Math.max(12, Number(bottomPx) || 0);
+    const safeTop = 12;
+    const launcherReserve = 76;
+    const queueReserve = (steeringPanelOpen && steeringQueue.length) ? 186 : 0;
+    const cardMax = Math.max(320, Math.min(560, Math.floor(viewportHeight - bottom - safeTop - launcherReserve - queueReserve)));
+    const queueMax = Math.max(96, Math.min(176, Math.floor(viewportHeight * 0.24)));
+    const queueListMax = Math.max(72, queueMax - 64);
+    steeringHost.style.setProperty('--ready-ai-card-max-height', `${cardMax}px`);
+    steeringHost.style.setProperty('--ready-ai-queue-max-height', `${queueMax}px`);
+    steeringHost.style.setProperty('--ready-ai-queue-list-max-height', `${queueListMax}px`);
   } catch (_) {}
 }
 function positionSteeringUi(force = false) {
@@ -496,6 +500,7 @@ function positionSteeringUi(force = false) {
       steeringHost.style.transform = 'none';
       steeringHost.style.right = `${right}px`;
       steeringHost.style.bottom = `${bottom}px`;
+      applySteeringViewportSizeVars(bottom);
       return;
     } catch (_) {}
   }
@@ -507,6 +512,7 @@ function positionSteeringUi(force = false) {
     steeringHost.style.transform = 'none';
     steeringHost.style.right = '18px';
     steeringHost.style.bottom = '18px';
+    applySteeringViewportSizeVars(18);
     return;
   }
   const fallbackSignature = `18|140|${layoutKey}`;
@@ -516,6 +522,7 @@ function positionSteeringUi(force = false) {
   steeringHost.style.transform = 'none';
   steeringHost.style.right = '18px';
   steeringHost.style.bottom = '140px';
+  applySteeringViewportSizeVars(140);
 }
 window.addEventListener('resize', () => {
   positionSteeringUi();

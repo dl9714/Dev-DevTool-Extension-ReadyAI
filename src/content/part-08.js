@@ -110,6 +110,8 @@ var STEERING_UI_STYLE_TEMPLATE_A = `
       .card {
         position: relative;
         width: min(400px, calc(100vw - 28px));
+        max-height: var(--ready-ai-card-max-height, min(560px, calc(100vh - 220px)));
+        overflow-y: auto;
         border-radius: 18px;
         border: 1px solid rgba(71, 85, 105, 0.42);
         background: rgba(17, 24, 39, 0.98);
@@ -263,7 +265,7 @@ var STEERING_UI_STYLE_TEMPLATE_A = `
         display: none;
         flex-direction: column;
         width: min(400px, calc(100vw - 28px));
-        max-height: min(176px, 28vh);
+        max-height: var(--ready-ai-queue-max-height, min(176px, 28vh));
         border-radius: 16px;
         border: 1px solid rgba(71, 85, 105, 0.28);
         background: rgba(15, 23, 42, 0.94);
@@ -329,7 +331,7 @@ var STEERING_UI_STYLE_TEMPLATE_A = `
         display: flex;
         flex-direction: column;
         gap: 6px;
-        max-height: min(112px, 20vh);
+        max-height: var(--ready-ai-queue-list-max-height, min(112px, 20vh));
         overflow: auto;
         padding-right: 2px;
       }
