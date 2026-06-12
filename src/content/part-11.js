@@ -1,4 +1,5 @@
 function mountSteeringUi() {
+  if (isReadyAiDuplicateContentInstance()) return;
   try { (document.body || document.documentElement).appendChild(steeringHost); } catch (_) {}
   restoreSteeringDraftToInput();
   applySteeringTheme();
@@ -9,10 +10,12 @@ function mountSteeringUi() {
   syncSteeringAttachmentPreview();
 }
 function ensureSteeringUi() {
+  if (!claimReadyAiContentOwnership('ensure_ui')) return null;
+  if (isReadyAiDuplicateContentInstance()) return null;
   if (steeringHost && steeringRoot && steeringRefs) {
     return reuseExistingSteeringUi();
   }
-  createSteeringUiHost();
+  if (createSteeringUiHost() === false) return null;
   buildSteeringRefs();
   bindSteeringUiEvents();
   mountSteeringUi();
@@ -32,6 +35,10 @@ function acknowledgeCompletion() {
   });
 }
 function applySteeringUiNow() {
+  if (isReadyAiDuplicateContentInstance()) {
+    hideSteeringUi();
+    return;
+  }
   if (!monitoring || !steeringEnabled) {
     hideSteeringUi();
     return;
@@ -306,6 +313,7 @@ function detectGenerating(site) {
 }
 function checkStatus() {
   if (!monitoring || !activeSite) return;
+  if (isReadyAiDuplicateContentInstance()) return;
   const platform = activeSite.key;
   let currentlyGenerating = false;
   beginStatusQueryCache();

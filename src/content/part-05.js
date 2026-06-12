@@ -21,6 +21,7 @@ function setSteeringStatus(text, isError = false) {
 }
 function hideSteeringUi() {
   if (steeringHost) steeringHost.style.display = 'none';
+  if (typeof isReadyAiDuplicateContentInstance === 'function' && isReadyAiDuplicateContentInstance()) return;
   syncSteeringQueueCount();
 }
 function getSteeringQueueCountValue() {

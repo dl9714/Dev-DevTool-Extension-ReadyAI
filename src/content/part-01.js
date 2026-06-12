@@ -82,6 +82,7 @@ function getMinStatusCheckGapMs() {
 }
 function scheduleCheck(force = false) {
   if (!monitoring) return;
+  if (typeof isReadyAiDuplicateContentInstance === 'function' && isReadyAiDuplicateContentInstance()) return;
   if (_checkScheduled) {
     if (!force) return;
     try { clearTimeout(_checkTimer); } catch (_) {}
@@ -113,6 +114,7 @@ function getDesiredPollingMs() {
 }
 function ensurePolling(force = false) {
   if (!monitoring) return;
+  if (typeof isReadyAiDuplicateContentInstance === 'function' && isReadyAiDuplicateContentInstance()) return;
   const desiredMs = getDesiredPollingMs();
   if (!force && checkInterval && _currentPollingMs === desiredMs) return;
   if (checkInterval) {

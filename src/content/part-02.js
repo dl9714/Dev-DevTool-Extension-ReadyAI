@@ -1,6 +1,7 @@
 function applyDesiredDocumentTitle(force = false) {
   if (!monitoring) return;
   if (!IS_TOP_FRAME) return;
+  if (typeof isReadyAiDuplicateContentInstance === 'function' && isReadyAiDuplicateContentInstance()) return;
   if (!isChatGptSafeMode()) publishTitleGuardState({ force });
   const currentTitle = String(document.title || '');
   const targetTitle = computeDesiredDocumentTitle(currentTitle);
@@ -245,6 +246,7 @@ function disconnectTitleSyncObserver() {
   titleSyncObserver = null;
 }
 function updateTitleBadge() {
+  if (isReadyAiDuplicateContentInstance()) return;
   if (!isChatGptSafeMode()) requestTitleGuardInstall();
   applyDesiredDocumentTitle();
 }
@@ -260,6 +262,7 @@ function getTitleBadgeUiSyncSignature() {
 }
 function syncTitleBadgeFromUiRender(force = false) {
   if (!monitoring || !IS_TOP_FRAME) return;
+  if (isReadyAiDuplicateContentInstance()) return;
   const now = Date.now();
   const signature = getTitleBadgeUiSyncSignature();
   const sameSignature = signature === titleBadgeLastUiSyncSignature;
@@ -272,6 +275,7 @@ function syncTitleBadgeFromUiRender(force = false) {
 function syncTitleBadgeFromStatusLoop(force = false) {
   if (isChatGptSafeMode()) return;
   if (!monitoring || !IS_TOP_FRAME) return;
+  if (isReadyAiDuplicateContentInstance()) return;
   const now = Date.now();
   const minGap = document.hidden ? 2500 : 1200;
   if (!force && titleBadgeLastLoopSyncAt && now - titleBadgeLastLoopSyncAt < minGap) return;
@@ -280,12 +284,14 @@ function syncTitleBadgeFromStatusLoop(force = false) {
 }
 function clearTitleBadge() {
   if (!IS_TOP_FRAME) return;
+  if (typeof isReadyAiDuplicateContentInstance === 'function' && isReadyAiDuplicateContentInstance()) return;
   if (!isChatGptSafeMode()) publishTitleGuardState({ enabled: false, force: true });
   const cleanTitle = hasCustomTabTitle() ? normalizeCustomTabTitle(customTabTitle) : getDesiredBaseTitle(getCleanDocumentTitleText());
   try { document.title = cleanTitle; } catch (_) {}
 }
 function detectChatGptGeneratingLight() {
   if (!isChatGptSafeMode()) return false;
+  if (isReadyAiDuplicateContentInstance()) return false;
   const selector = typeof CHATGPT_STOP_SELECTOR === 'string'
     ? CHATGPT_STOP_SELECTOR
     : '[data-testid="stop-button"],button[aria-label*="Stop"],button[aria-label*="stop"],button[aria-label*="중지"],button[data-testid*="stop"]';
@@ -295,6 +301,7 @@ function detectChatGptGeneratingLight() {
 }
 function sendChatGptLightStatusUpdate() {
   if (!activeSite || !isChatGptSafeMode()) return;
+  if (isReadyAiDuplicateContentInstance()) return;
   try {
     chrome.runtime.sendMessage({
       action: 'status_update',
@@ -308,6 +315,7 @@ function sendChatGptLightStatusUpdate() {
 }
 function runChatGptLightTitleBadgeSync() {
   if (!isChatGptSafeMode() || !monitoring || !IS_TOP_FRAME) return;
+  if (isReadyAiDuplicateContentInstance()) return;
   syncNativePageTitleFromDocumentTitle();
   applyDesiredDocumentTitle(true);
 }
@@ -553,7 +561,85 @@ function bindChatGptLightTitleBadgeTriggers() {
 var STEERING_AUTO_SEND_DELAY_MS = 1000;
 var STEERING_TURN_WATCHDOG_VISIBLE_MS = 12000;
 var STEERING_TURN_WATCHDOG_HIDDEN_MS = 20000;
-var READY_AI_CONTENT_VERSION = '2026-06-12.21-single-queue-dispatch';
+var READY_AI_CONTENT_VERSION = '2026-06-12.25-duplicate-extension-guard';
+var READY_AI_CANONICAL_EXTENSION_ID = 'deojggohikpfbhgdjbdogmkdgpkcighm';
+var readyAiDuplicateContentInstance = false;
+function getReadyAiExtensionId() {
+  try {
+    return String(chrome?.runtime?.id || '');
+  } catch (_) {
+    return '';
+  }
+}
+function isReadyAiCanonicalExtension() {
+  return getReadyAiExtensionId() === READY_AI_CANONICAL_EXTENSION_ID;
+}
+function isReadyAiDuplicateContentInstance() {
+  if (!readyAiDuplicateContentInstance && IS_TOP_FRAME) {
+    try {
+      const myId = getReadyAiExtensionId();
+      const ownerId = String(document.documentElement?.getAttribute?.('data-ready-ai-extension-owner') || '');
+      const ownerIsCanonical = ownerId === READY_AI_CANONICAL_EXTENSION_ID;
+      if (ownerId && ownerId !== myId && (!isReadyAiCanonicalExtension() || ownerIsCanonical)) {
+        markReadyAiDuplicateContentInstance('owner_changed');
+      }
+    } catch (_) {}
+  }
+  return !!readyAiDuplicateContentInstance;
+}
+function markReadyAiDuplicateContentInstance(reason = '') {
+  readyAiDuplicateContentInstance = true;
+  try {
+    if (IS_TOP_FRAME && document.documentElement) {
+      document.documentElement.setAttribute('data-ready-ai-duplicate-owner', getReadyAiExtensionId());
+      document.documentElement.setAttribute('data-ready-ai-duplicate-reason', String(reason || 'duplicate'));
+    }
+  } catch (_) {}
+}
+function claimReadyAiContentOwnership(reason = '') {
+  if (!IS_TOP_FRAME) return true;
+  const myId = getReadyAiExtensionId();
+  if (!myId) return true;
+  const root = document.documentElement;
+  if (!root) return true;
+  let ownerId = '';
+  try { ownerId = String(root.getAttribute('data-ready-ai-extension-owner') || ''); } catch (_) { ownerId = ''; }
+  if (ownerId && ownerId !== myId) {
+    const ownerIsCanonical = ownerId === READY_AI_CANONICAL_EXTENSION_ID;
+    if (!isReadyAiCanonicalExtension() || ownerIsCanonical) {
+      markReadyAiDuplicateContentInstance(reason || 'owner_exists');
+      return false;
+    }
+  }
+  readyAiDuplicateContentInstance = false;
+  try {
+    root.setAttribute('data-ready-ai-extension-owner', myId);
+    root.setAttribute('data-ready-ai-content-version', READY_AI_CONTENT_VERSION);
+    root.removeAttribute('data-ready-ai-duplicate-owner');
+    root.removeAttribute('data-ready-ai-duplicate-reason');
+  } catch (_) {}
+  return true;
+}
+function shouldYieldToReadyAiSteeringHost(host) {
+  if (!host || host === steeringHost) return false;
+  const myId = getReadyAiExtensionId();
+  let ownerId = '';
+  try {
+    ownerId = String(host.getAttribute('data-ready-ai-extension-id') || host.dataset?.readyAiExtensionId || '');
+  } catch (_) {
+    ownerId = '';
+  }
+  if (ownerId && ownerId === myId) return false;
+  if (isReadyAiCanonicalExtension()) return false;
+  return true;
+}
+function stampReadyAiSteeringHost(host) {
+  if (!host) return;
+  try {
+    host.setAttribute('data-ready-ai-extension-id', getReadyAiExtensionId());
+    host.setAttribute('data-ready-ai-content-version', READY_AI_CONTENT_VERSION);
+  } catch (_) {}
+}
 try {
   globalThis.__ReadyAiContentInstanceSeq = (Number(globalThis.__ReadyAiContentInstanceSeq) || 0) + 1;
 } catch (_) {}

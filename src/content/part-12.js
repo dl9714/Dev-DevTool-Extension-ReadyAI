@@ -58,6 +58,10 @@ function bootstrapChatGptSafeModeTitleBadge() {
   });
 }
 function startMonitoring(site) {
+  if (!claimReadyAiContentOwnership('start_monitoring')) {
+    stopMonitoring();
+    return;
+  }
   const nextSiteKey = String(site?.key || '');
   const chatGptSafeModeCandidate = nextSiteKey === 'chatgpt' || isChatGptSafeMode();
   if (monitoring && activeSite?.key === site?.key) {
@@ -158,7 +162,7 @@ function stopMonitoring() {
   titleBadgeLastLoopSyncAt = 0;
   titleBadgeLastUiSyncAt = 0;
   titleBadgeLastUiSyncSignature = '';
-  clearTitleBadge();
+  if (!isReadyAiDuplicateContentInstance()) clearTitleBadge();
   clearSteeringAutoSendTimer();
   clearSteeringSendLock();
   steeringProcessing = false;
@@ -295,7 +299,11 @@ try {
     const tabLevelSteeringAction = /^(send_steering_prompt_now|enqueue_steering_prompt|clear_steering_queue|process_steering_queue_now|get_steering_state)$/.test(action);
     if (!IS_TOP_FRAME && tabLevelSteeringAction) return;
     if (msg.action === 'ping') {
-      try { sendResponse?.({ ok: true, readyAiContentVersion: READY_AI_CONTENT_VERSION }); } catch (_) {}
+      try { sendResponse?.({ ok: true, readyAiContentVersion: READY_AI_CONTENT_VERSION, duplicate: isReadyAiDuplicateContentInstance(), extensionId: getReadyAiExtensionId() }); } catch (_) {}
+      return;
+    }
+    if (isReadyAiDuplicateContentInstance()) {
+      try { sendResponse?.({ ok: false, skipped: true, duplicate: true, extensionId: getReadyAiExtensionId() }); } catch (_) {}
       return;
     }
     if (msg.action === 'force_check') {

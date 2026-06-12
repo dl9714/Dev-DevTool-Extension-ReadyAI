@@ -1,5 +1,16 @@
 # Ready_Ai Badge and Follow-Up Rules
 
+## Duplicate Extension Guard
+
+Ready_Ai must not run two active unpacked copies against ChatGPT. On this PC the duplicate ids observed were:
+
+- Canonical repo extension: `deojggohikpfbhgdjbdogmkdgpkcighm`
+- Older mirrored-path extension: `ajnolilmicdilijebljgchoodgajnfeg`
+
+If both are enabled, each extension has its own isolated content world and background worker. They can both inject the same UI id, send `force_check`, process the same follow-up queue, and make Chrome freeze when multiple ChatGPT tabs are open.
+
+Do not remove the page-level ownership guard in the content script. Duplicate Ready_Ai instances must yield before creating `#ready-ai-steering-host`, before running heavy status checks, and before processing follow-up queue messages.
+
 이 문서는 배지 상태 규칙과 후속 지시 규칙을 고정하기 위한 기준 문서다.
 이 문서의 항목은 사용자 요청 없이 임의로 바꾸지 않는다.
 

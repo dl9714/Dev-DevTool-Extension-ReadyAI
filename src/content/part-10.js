@@ -131,9 +131,14 @@ function reuseExistingSteeringUi() {
   return steeringRefs;
 }
 function createSteeringUiHost() {
+  if (!claimReadyAiContentOwnership('create_ui')) return false;
   try {
     const staleHost = document.getElementById('ready-ai-steering-host');
     if (staleHost && staleHost !== steeringHost) {
+      if (shouldYieldToReadyAiSteeringHost(staleHost)) {
+        markReadyAiDuplicateContentInstance('foreign_host');
+        return false;
+      }
       const staleInput = staleHost.shadowRoot?.getElementById?.('ready-ai-steering-input');
       const staleDraft = String(staleInput?.value || '').trim();
       if (staleDraft && !String(steeringDraftText || '').trim()) setSteeringDraftText(staleInput.value || '');
@@ -150,10 +155,12 @@ function createSteeringUiHost() {
   steeringHost.style.zIndex = '2147483647';
   steeringHost.style.pointerEvents = 'none';
   steeringHost.style.display = 'none';
+  stampReadyAiSteeringHost(steeringHost);
   steeringRoot = steeringHost.attachShadow({ mode: 'open' });
   steeringRoot.innerHTML = STEERING_UI_STYLE_TEMPLATE_A + STEERING_UI_STYLE_TEMPLATE_B + STEERING_UI_MARKUP_TEMPLATE;
   steeringAppliedThemeSignature = '';
   steeringLastPositionSignature = '';
+  return true;
 }
 function buildSteeringRefs() {
   steeringRefs = {
