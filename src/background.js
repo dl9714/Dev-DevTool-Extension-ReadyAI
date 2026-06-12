@@ -66,7 +66,7 @@ const CHATGPT_NEW_CHAT_TAB_GAP_MS = 7_000;
 const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
-const READY_AI_CONTENT_VERSION = '2026-06-12.14-manual-chatgpt-injection';
+const READY_AI_CONTENT_VERSION = '2026-06-12.15-active-chatgpt-injection';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
 const TITLE_GUARD_MAIN_FILE = 'src/content/title-guard-main.js';
 const CONTENT_SCRIPT_FILES = Object.freeze([
@@ -754,13 +754,21 @@ function isChatGptUrl(url) {
     return false;
   }
 }
+function getChatGptFallbackSite() {
+  return { key: 'chatgpt', name: 'ChatGPT', detection: 'chatgpt' };
+}
 function getTabSteeringQueueCount(tabId) {
   return Math.max(0, Number(tabStates?.[tabId]?.steeringQueueCount) || 0);
 }
-function shouldEnsureContentForTabEvent(tab) {
-  if (!tab?.id || !isMonitoredUrl(tab.url || '')) return false;
-  if (!isChatGptUrl(tab.url || '')) return true;
+function isKnownActiveTab(tab) {
+  if (!tab?.id) return false;
   if (tab.active) return true;
+  return getActiveTabIdForWindow(tab.windowId) === tab.id;
+}
+function shouldEnsureContentForTabEvent(tab) {
+  if (!tab?.id || !tab.url) return false;
+  if (!isChatGptUrl(tab.url || '')) return isMonitoredUrl(tab.url || '');
+  if (isKnownActiveTab(tab)) return true;
   if (getTabSteeringQueueCount(tab.id) > 0) return true;
   if (tabStates?.[tab.id]?.status === 'ORANGE') return true;
   return false;
@@ -1766,6 +1774,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (dashboardRelevantChanged) bumpDashboardVersion();
 });
 function resolveSiteForUrl(url) {
+  if (isChatGptUrl(url)) return getChatGptFallbackSite();
   const sitesApi = globalThis?.ReadyAi?.sites;
   if (!sitesApi?.resolveSiteFromConfig) return null;
   try {
@@ -2374,23 +2383,23 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     && isMonitoredUrl(nextUrl)
     && !titleHasReadyAiPrefix(changeInfo.title || tab?.title || '');
   if (changeInfo.status === 'complete' || changeInfo.url || titleChangedWithoutBadge) {
-    const candidate = { ...prevMeta, ...(tab || {}), id: tabId, url: nextUrl };
-    if (shouldEnsureContentForTabEvent(candidate)) {
-      safeActionCall((async () => {
-        const ready = await ensureContentScripts(candidate);
-        if (!ready) return;
-        if (titleChangedWithoutBadge) {
-          if (!isChatGptUrl(candidate.url || '')) await ensureMainWorldTitleGuard(tabId);
-          await pTabsSendMessage(tabId, { action: 'force_title_sync', reason: 'tab_title' }, { frameId: 0 });
-          return;
-        }
-        await pTabsSendMessage(
-          tabId,
-          { action: 'force_check', reason: changeInfo.status === 'complete' ? 'tab_complete' : 'tab_url', topFrameOnly: isChatGptUrl(candidate.url || '') },
-          isChatGptUrl(candidate.url || '') ? { frameId: 0 } : null
-        );
-      })());
-    }
+    safeActionCall((async () => {
+      const latest = await pTabsGet(tabId);
+      const candidate = { ...prevMeta, ...(tab || {}), ...(latest || {}), id: tabId, url: latest?.url || nextUrl };
+      if (!shouldEnsureContentForTabEvent(candidate)) return;
+      const ready = await ensureContentScripts(candidate);
+      if (!ready) return;
+      if (titleChangedWithoutBadge) {
+        if (!isChatGptUrl(candidate.url || '')) await ensureMainWorldTitleGuard(tabId);
+        await pTabsSendMessage(tabId, { action: 'force_title_sync', reason: 'tab_title' }, { frameId: 0 });
+        return;
+      }
+      await pTabsSendMessage(
+        tabId,
+        { action: 'force_check', reason: changeInfo.status === 'complete' ? 'tab_complete' : 'tab_url', topFrameOnly: isChatGptUrl(candidate.url || '') },
+        isChatGptUrl(candidate.url || '') ? { frameId: 0 } : null
+      );
+    })());
   }
 });
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
