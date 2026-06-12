@@ -561,7 +561,8 @@ function bindChatGptLightTitleBadgeTriggers() {
 var STEERING_AUTO_SEND_DELAY_MS = 1000;
 var STEERING_TURN_WATCHDOG_VISIBLE_MS = 12000;
 var STEERING_TURN_WATCHDOG_HIDDEN_MS = 20000;
-var READY_AI_CONTENT_VERSION = '2026-06-12.25-duplicate-extension-guard';
+var READY_AI_CONTENT_VERSION = '2026-06-12.21-single-queue-dispatch';
+var READY_AI_CONTENT_BUILD_VERSION = '2026-06-12.26-stable-version-handshake';
 var READY_AI_CANONICAL_EXTENSION_ID = 'deojggohikpfbhgdjbdogmkdgpkcighm';
 var readyAiDuplicateContentInstance = false;
 function getReadyAiExtensionId() {
@@ -614,7 +615,7 @@ function claimReadyAiContentOwnership(reason = '') {
   readyAiDuplicateContentInstance = false;
   try {
     root.setAttribute('data-ready-ai-extension-owner', myId);
-    root.setAttribute('data-ready-ai-content-version', READY_AI_CONTENT_VERSION);
+    root.setAttribute('data-ready-ai-content-version', READY_AI_CONTENT_BUILD_VERSION);
     root.removeAttribute('data-ready-ai-duplicate-owner');
     root.removeAttribute('data-ready-ai-duplicate-reason');
   } catch (_) {}
@@ -637,7 +638,7 @@ function stampReadyAiSteeringHost(host) {
   if (!host) return;
   try {
     host.setAttribute('data-ready-ai-extension-id', getReadyAiExtensionId());
-    host.setAttribute('data-ready-ai-content-version', READY_AI_CONTENT_VERSION);
+    host.setAttribute('data-ready-ai-content-version', READY_AI_CONTENT_BUILD_VERSION);
   } catch (_) {}
 }
 try {

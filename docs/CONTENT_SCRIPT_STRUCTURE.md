@@ -16,6 +16,8 @@ Do not leave both Ready_Ai unpacked entries enabled during normal use. Two exten
 
 The content script has a page-level duplicate guard using `data-ready-ai-extension-owner`, `data-ready-ai-extension-id`, and `data-ready-ai-content-version`. Do not remove it. It lets one Ready_Ai instance own the ChatGPT page while duplicate instances answer `ping` but skip UI, status checks, and queue processing.
 
+Do not bump the `readyAiContentVersion` handshake string for ordinary content changes. Chrome can keep an older service worker alive after files are updated; if the old worker expects the previous string and the newly injected content reports a newer string, the worker repeatedly reinjects the full content script set and can freeze ChatGPT tabs. Keep `READY_AI_CONTENT_VERSION` stable for compatibility, and put the actual build marker in `READY_AI_CONTENT_BUILD_VERSION` / `readyAiContentBuildVersion` / `data-ready-ai-content-version`.
+
 ## Injection Rules
 
 The extension must not declare default `content_scripts` in `manifest.json`.

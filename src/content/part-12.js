@@ -299,7 +299,15 @@ try {
     const tabLevelSteeringAction = /^(send_steering_prompt_now|enqueue_steering_prompt|clear_steering_queue|process_steering_queue_now|get_steering_state)$/.test(action);
     if (!IS_TOP_FRAME && tabLevelSteeringAction) return;
     if (msg.action === 'ping') {
-      try { sendResponse?.({ ok: true, readyAiContentVersion: READY_AI_CONTENT_VERSION, duplicate: isReadyAiDuplicateContentInstance(), extensionId: getReadyAiExtensionId() }); } catch (_) {}
+      try {
+        sendResponse?.({
+          ok: true,
+          readyAiContentVersion: READY_AI_CONTENT_VERSION,
+          readyAiContentBuildVersion: READY_AI_CONTENT_BUILD_VERSION,
+          duplicate: isReadyAiDuplicateContentInstance(),
+          extensionId: getReadyAiExtensionId(),
+        });
+      } catch (_) {}
       return;
     }
     if (isReadyAiDuplicateContentInstance()) {

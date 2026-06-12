@@ -66,7 +66,8 @@ const CHATGPT_NEW_CHAT_TAB_GAP_MS = 7_000;
 const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
-const READY_AI_CONTENT_VERSION = '2026-06-12.25-duplicate-extension-guard';
+const READY_AI_CONTENT_VERSION = '2026-06-12.21-single-queue-dispatch';
+const READY_AI_CONTENT_BUILD_VERSION = '2026-06-12.26-stable-version-handshake';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
 const TITLE_GUARD_MAIN_FILE = 'src/content/title-guard-main.js';
 const CONTENT_SCRIPT_FILES = Object.freeze([
@@ -761,7 +762,13 @@ async function ensureContentForPopupTab(tabId, reason = 'popup') {
     { action: 'force_check', reason: reason || 'popup', topFrameOnly: chatGptTopFrameOnly },
     chatGptTopFrameOnly ? { frameId: 0 } : null
   );
-  return { ok: true, tabId, chatGpt: chatGptTopFrameOnly, readyAiContentVersion: READY_AI_CONTENT_VERSION };
+  return {
+    ok: true,
+    tabId,
+    chatGpt: chatGptTopFrameOnly,
+    readyAiContentVersion: READY_AI_CONTENT_VERSION,
+    readyAiContentBuildVersion: READY_AI_CONTENT_BUILD_VERSION,
+  };
 }
 function isChatGptUrl(url) {
   try {

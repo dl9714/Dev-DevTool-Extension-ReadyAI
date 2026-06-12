@@ -11,6 +11,8 @@ If both are enabled, each extension has its own isolated content world and backg
 
 Do not remove the page-level ownership guard in the content script. Duplicate Ready_Ai instances must yield before creating `#ready-ai-steering-host`, before running heavy status checks, and before processing follow-up queue messages.
 
+Do not bump `READY_AI_CONTENT_VERSION` just to mark a build. That string is the background/content compatibility handshake. Bumping it while Chrome still has an older service worker alive causes repeated `chrome.scripting.executeScript` reinjection and can make multiple ChatGPT tabs freeze. Use `READY_AI_CONTENT_BUILD_VERSION` for build identity instead.
+
 이 문서는 배지 상태 규칙과 후속 지시 규칙을 고정하기 위한 기준 문서다.
 이 문서의 항목은 사용자 요청 없이 임의로 바꾸지 않는다.
 
