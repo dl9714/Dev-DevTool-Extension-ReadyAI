@@ -66,7 +66,7 @@ const CHATGPT_NEW_CHAT_TAB_GAP_MS = 7_000;
 const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
-const READY_AI_CONTENT_VERSION = '2026-06-12.16-active-chatgpt-init';
+const READY_AI_CONTENT_VERSION = '2026-06-12.17-popup-active-ensure';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
 const TITLE_GUARD_MAIN_FILE = 'src/content/title-guard-main.js';
 const CONTENT_SCRIPT_FILES = Object.freeze([
@@ -745,6 +745,23 @@ async function ensureContentScripts(tab, options = {}) {
   const reinjected = await pTabsSendMessageResult(tabId, { action: 'ping', topFrameOnly }, 1500, messageOptions);
   await pTabsSendMessage(tabId, { action: 'force_check', reason: 'inject', topFrameOnly }, messageOptions);
   return !!reinjected?.ok;
+}
+async function ensureContentForPopupTab(tabId, reason = 'popup') {
+  const tab = await pTabsGet(tabId);
+  if (!tab?.id || !tab.url) return { ok: false, message: 'tab not found' };
+  const site = resolveSiteForUrl(tab.url || '');
+  if (!site) return { ok: false, message: 'unsupported tab' };
+  const chatGptTopFrameOnly = isChatGptUrl(tab.url || '');
+  const ready = await ensureContentScripts(tab, chatGptTopFrameOnly
+    ? { allFrames: false, topFrameOnly: true, frameId: 0 }
+    : {});
+  if (!ready) return { ok: false, message: 'content injection failed' };
+  await pTabsSendMessage(
+    tabId,
+    { action: 'force_check', reason: reason || 'popup', topFrameOnly: chatGptTopFrameOnly },
+    chatGptTopFrameOnly ? { frameId: 0 } : null
+  );
+  return { ok: true, tabId, chatGpt: chatGptTopFrameOnly, readyAiContentVersion: READY_AI_CONTENT_VERSION };
 }
 function isChatGptUrl(url) {
   try {
@@ -2070,6 +2087,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'batch_set_custom_tab_titles_for_tabs',
     'batch_clear_custom_tab_titles_for_tabs',
     'reset_runtime_caches_for_storage_replace',
+    'ensure_content_for_tab',
   ]);
   if (!popupScopedActions.has(message?.action)) return;
   const tabId = clampInt(message?.tabId, NaN, 0, Number.MAX_SAFE_INTEGER);
@@ -2095,6 +2113,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!Number.isFinite(tabId) || tabId <= 0) {
     sendResponse({ ok: false, message: '탭을 찾지 못했습니다.' });
     return;
+  }
+  if (message.action === 'ensure_content_for_tab') {
+    ensureContentForPopupTab(tabId, message.reason || 'popup')
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ ok: false, message: err?.message || 'content injection failed' }));
+    return true;
   }
   if (message.action === 'get_custom_tab_title_for_tab') {
     sendResponse({ ok: true, title: getCustomTabTitleForTab(tabId) });

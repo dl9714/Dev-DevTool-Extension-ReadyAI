@@ -906,13 +906,41 @@ async function copyTextToClipboard(text, successLabel = '복사됨') {
     return !!ok;
   }
 }
+function isNoReceivingEndError(res) {
+  const text = String(res?.error || res?.message || '').toLowerCase();
+  return text.includes('receiving end does not exist')
+    || text.includes('could not establish connection')
+    || text.includes('message port closed')
+    || text.includes('no receiver');
+}
+async function ensureContentForTab(tabId, reason = 'popup') {
+  if (!Number.isFinite(Number(tabId))) return { ok: false, error: 'invalid tab' };
+  return sendRuntimeMessage({
+    action: 'ensure_content_for_tab',
+    tabId: Number(tabId),
+    reason,
+  });
+}
+async function ensureActiveTabContent(reason = 'popup_open') {
+  const tabs = await pQueryTabs({ active: true, currentWindow: true });
+  const tab = tabs[0];
+  if (!tab?.id) return { ok: false, error: 'active tab not found' };
+  return ensureContentForTab(tab.id, reason);
+}
 async function sendSteeringToTab(tabId, text, opts = {}) {
   const value = String(text || '').trim();
   if (!value) {
     setHint('전송할 문구를 먼저 입력해줘', true);
     return false;
   }
-  const res = await pSendTabMessage(tabId, { action: 'enqueue_steering_prompt', text: value });
+  await ensureContentForTab(tabId, opts.ensureReason || 'popup_send_steering');
+  let res = await pSendTabMessage(tabId, { action: 'enqueue_steering_prompt', text: value });
+  if (!res?.ok && isNoReceivingEndError(res)) {
+    const ensured = await ensureContentForTab(tabId, 'popup_send_steering_retry');
+    if (ensured?.ok) {
+      res = await pSendTabMessage(tabId, { action: 'enqueue_steering_prompt', text: value });
+    }
+  }
   if (res?.ok) {
     const successText = typeof opts.successText === 'string'
       ? opts.successText
@@ -925,7 +953,14 @@ async function sendSteeringToTab(tabId, text, opts = {}) {
   return false;
 }
 async function clearSteeringQueueForTab(tabId) {
-  const res = await pSendTabMessage(tabId, { action: 'clear_steering_queue' });
+  await ensureContentForTab(tabId, 'popup_clear_queue');
+  let res = await pSendTabMessage(tabId, { action: 'clear_steering_queue' });
+  if (!res?.ok && isNoReceivingEndError(res)) {
+    const ensured = await ensureContentForTab(tabId, 'popup_clear_queue_retry');
+    if (ensured?.ok) {
+      res = await pSendTabMessage(tabId, { action: 'clear_steering_queue' });
+    }
+  }
   setHint(res?.ok ? '이 탭 대기열 비움' : '이 탭 대기열 비우기 실패', !res?.ok);
   return !!res?.ok;
 }
@@ -2670,6 +2705,9 @@ document.addEventListener('DOMContentLoaded', () => {
     renderTemplates(cfg);
     wireActions(cfg);
     refreshSummary(cfg);
+    ensureActiveTabContent('popup_open').then(() => {
+      refreshRuntimeDashboard(cfg, true, { force: true });
+    }).catch(() => {});
     refreshRuntimeDashboard(cfg, true, { force: true }).then(() => renderTitleManager(cfg)).catch(() => {});
     startDashboardPolling(cfg);
     document.addEventListener('visibilitychange', () => {
