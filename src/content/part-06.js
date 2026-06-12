@@ -140,6 +140,7 @@ function renderSteeringQueue() {
     queue: steeringQueue.map((item) => [item?.id, String(item?.text || '').trim(), getSteeringItemAttachmentCount(item)]),
   });
   steeringRefs.queueWrap.style.display = nextDisplay;
+  steeringRefs.queue.classList.toggle('dragging-active', !!steeringQueueDragState);
   if (steeringQueueRenderSignature === signature) return;
   steeringQueueRenderSignature = signature;
   steeringRefs.queue.innerHTML = '';
@@ -158,14 +159,30 @@ function renderSteeringQueue() {
     if (steeringQueueDragState?.itemId === item?.id) row.classList.add('dragging');
     row.setAttribute('data-queue-id', String(item?.id || ''));
     row.setAttribute('data-queue-index', String(index));
+    const dragHandle = document.createElement('button');
+    dragHandle.type = 'button';
+    dragHandle.className = 'queue-drag-handle';
+    dragHandle.title = isEditing ? '수정 중에는 드래그할 수 없습니다.' : '왼쪽 핸들을 드래그해서 순서 변경';
+    dragHandle.setAttribute('aria-label', `${index + 1}번 대기, 드래그해서 순서 변경`);
+    const grip = document.createElement('span');
+    grip.className = 'queue-grip';
+    grip.setAttribute('aria-hidden', 'true');
     const order = document.createElement('span');
     order.className = 'queue-order';
     order.textContent = String(index + 1);
-    order.title = isEditing ? '수정 중에는 드래그할 수 없습니다.' : '드래그해서 순서 변경';
-    order.setAttribute('aria-label', `${index + 1}번 대기, 드래그해서 순서 변경`);
+    dragHandle.appendChild(grip);
+    dragHandle.appendChild(order);
     if (!isEditing) {
-      order.addEventListener('pointerdown', (event) => {
+      dragHandle.addEventListener('pointerdown', (event) => {
         beginSteeringQueueDrag(event, item.id);
+      });
+      dragHandle.addEventListener('keydown', (event) => {
+        if (event.isComposing) return;
+        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+          try { event.preventDefault(); } catch (_) {}
+          try { event.stopPropagation(); } catch (_) {}
+          moveSteeringQueueItem(item.id, event.key === 'ArrowUp' ? -1 : 1);
+        }
       });
     }
     const body = document.createElement('div');
@@ -246,7 +263,7 @@ function renderSteeringQueue() {
       setSteeringStatus(steeringQueue.length ? `${getSteeringQueueCountLabel()}` : '대기를 비웠습니다.');
       updateSteeringUi();
     }, 'danger'));
-    row.appendChild(order);
+    row.appendChild(dragHandle);
     row.appendChild(body);
     row.appendChild(actions);
     fragment.appendChild(row);

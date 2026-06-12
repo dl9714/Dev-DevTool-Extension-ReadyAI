@@ -335,13 +335,13 @@ var STEERING_UI_STYLE_TEMPLATE_A = `
       }
       .queue-item {
         display: grid;
-        grid-template-columns: 22px minmax(0, 1fr) auto;
+        grid-template-columns: 38px minmax(0, 1fr) auto;
         align-items: center;
         gap: 8px;
         border-radius: 12px;
         border: 1px solid rgba(148, 163, 184, 0.2);
         background: rgba(255, 255, 255, 0.04);
-        padding: 8px 10px;
+        padding: 7px 10px 7px 6px;
         transition: border-color 120ms ease, background 120ms ease, opacity 120ms ease, transform 120ms ease;
       }
       .queue-item.editing {
@@ -362,6 +362,47 @@ var STEERING_UI_STYLE_TEMPLATE_A = `
         border-color: rgba(22, 163, 74, 0.42);
         background: rgba(220, 252, 231, 0.96);
       }
+      .queue-drag-handle {
+        appearance: none;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        display: inline-flex;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 4px;
+        width: 38px;
+        min-width: 38px;
+        height: 28px;
+        border-radius: 7px;
+        padding: 0 3px;
+        cursor: grab;
+        user-select: none;
+        touch-action: none;
+      }
+      .queue-drag-handle:hover,
+      .queue-drag-handle:focus-visible,
+      .queue-list.dragging-active .queue-drag-handle {
+        background: rgba(148, 163, 184, 0.12);
+        outline: none;
+      }
+      .queue-item.dragging .queue-drag-handle {
+        cursor: grabbing;
+        background: rgba(34, 197, 94, 0.16);
+      }
+      .queue-item.editing .queue-drag-handle {
+        cursor: default;
+        opacity: 0.68;
+      }
+      .queue-grip {
+        width: 8px;
+        height: 18px;
+        flex: 0 0 8px;
+        opacity: 0.62;
+        background-image: radial-gradient(circle, currentColor 1.2px, transparent 1.4px);
+        background-size: 4px 5px;
+        background-position: 0 1px;
+      }
       .queue-order {
         display: inline-flex;
         align-items: center;
@@ -373,17 +414,6 @@ var STEERING_UI_STYLE_TEMPLATE_A = `
         font-weight: 800;
         background: rgba(34, 197, 94, 0.16);
         color: #bbf7d0;
-        cursor: grab;
-        user-select: none;
-        touch-action: none;
-      }
-      .queue-order:active,
-      .queue-item.dragging .queue-order {
-        cursor: grabbing;
-      }
-      .queue-item.editing .queue-order {
-        cursor: default;
-        opacity: 0.68;
       }
       .dock[data-theme="light"] .queue-order {
         color: #166534;
