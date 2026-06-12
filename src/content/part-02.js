@@ -459,7 +459,6 @@ function scheduleChatGptLightCompletionWatch(delay = 900) {
       const awaitingUnobservedSteeringTurn = !!(
         steeringAwaitingTurnCompletion
         && !steeringObservedGenerationSinceSend
-        && (steeringAwaitingResponseStart || !isSteeringTurnWatchdogMature())
       );
       if (awaitingUnobservedSteeringTurn && now < chatGptLightGenerationWatchUntil) {
         scheduleChatGptLightCompletionWatch(document.hidden ? 1800 : 900);
@@ -549,7 +548,7 @@ function bindChatGptLightTitleBadgeTriggers() {
 var STEERING_AUTO_SEND_DELAY_MS = 1000;
 var STEERING_TURN_WATCHDOG_VISIBLE_MS = 12000;
 var STEERING_TURN_WATCHDOG_HIDDEN_MS = 20000;
-var READY_AI_CONTENT_VERSION = '2026-06-12.6-fixed-resume-label';
+var READY_AI_CONTENT_VERSION = '2026-06-12.7-followup-wait-guard';
 try {
   var existingSteeringHost = document.getElementById('ready-ai-steering-host');
   if (existingSteeringHost) existingSteeringHost.remove();

@@ -166,6 +166,25 @@ function markSteeringGenerationObserved() {
   steeringObservedGenerationSinceSend = true;
   clearSteeringAwaitingResponseStart();
 }
+function isChatGptUnobservedSteeringTurnPending() {
+  return !!(
+    isChatGptSafeMode()
+    && steeringAwaitingTurnCompletion
+    && !steeringObservedGenerationSinceSend
+  );
+}
+function holdChatGptUnobservedSteeringTurn(reason = '') {
+  if (!isChatGptUnobservedSteeringTurnPending()) return false;
+  clearSteeringAutoSendTimer();
+  completionStatus = 'idle';
+  if (!steeringTurnCompletionWatchdogTimer) {
+    armSteeringTurnCompletionWatchdog(getSteeringTurnWatchdogDelayMs());
+  }
+  setSteeringStatus('후속 대기: ChatGPT 응답 확인 중입니다.');
+  updateTitleBadge();
+  updateSteeringUi();
+  return true;
+}
 function recoverStaleSteeringTurnWait(reason = '') {
   if (!monitoring || !steeringAwaitingTurnCompletion) return false;
   try { maybeRescanShadowRoots(); } catch (_) {}
@@ -187,6 +206,7 @@ function recoverStaleSteeringTurnWait(reason = '') {
     updateSteeringUi();
     return false;
   }
+  if (holdChatGptUnobservedSteeringTurn(reason)) return false;
   if (isGenerating) isGenerating = false;
   clearSteeringTurnCompletionWait();
   clearSteeringAwaitingResponseStart();
@@ -236,7 +256,19 @@ function hasActiveSteeringOffer() {
   return !isGenerating && (completionStatus === 'completed' || completionStatus === 'idle');
 }
 function canAutoSendSteeringNow() {
+  if (isChatGptUnobservedSteeringTurnPending()) return false;
   return hasActiveSteeringOffer() && !steeringSendLock && !steeringProcessing && !steeringAwaitingResponseStart && !steeringAwaitingTurnCompletion;
+}
+function isSteeringFollowupWaiting() {
+  return !!(
+    steeringQueue.length
+    && (
+      steeringAwaitingTurnCompletion
+      || steeringAwaitingResponseStart
+      || isGenerating
+      || steeringProcessing
+    )
+  );
 }
 function isSteeringQueueBlocked() {
   if (!steeringQueue.length || canAutoSendSteeringNow()) return false;
@@ -278,6 +310,7 @@ function getSteeringLauncherSubText() {
 }
 function getSteeringStateLabel() {
   const name = activeSite?.name || 'AI';
+  if (isSteeringFollowupWaiting()) return `${name} 후속 대기`;
   return `${name} 후속 지시`;
 }
 function getSteeringPrimaryLabel() {
@@ -285,6 +318,7 @@ function getSteeringPrimaryLabel() {
     const hasFiles = typeof getSteeringDraftAttachmentCount === 'function' && getSteeringDraftAttachmentCount() > 0;
     return hasFiles ? '현재대화' : '새 채팅';
   }
+  if (isSteeringFollowupWaiting()) return '후속 대기';
   return canAutoSendSteeringNow() ? 'Enter' : '입력 대기';
 }
 function setSteeringAdvancedEnabled(nextValue) {

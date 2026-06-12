@@ -430,6 +430,7 @@ async function resumeSteeringQueueNow(options = {}) {
     updateSteeringUi();
     return false;
   }
+  if (holdChatGptUnobservedSteeringTurn('resume')) return false;
   clearSteeringAutoSendTimer();
   clearSteeringSendLock();
   clearSteeringAwaitingResponseStart();
