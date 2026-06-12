@@ -427,7 +427,7 @@ function positionSteeringUi(force = false) {
       const isChatGpt = getSiteKey() === 'chatgpt';
       const chatGptRightShift = isChatGpt ? 250 : 0;
       const right = Math.max(12, Math.round(window.innerWidth - rect.right - chatGptRightShift));
-      const bottomAnchor = isChatGpt ? (window.innerHeight - 92) : (rect.top - 10);
+      const bottomAnchor = isChatGpt ? (window.innerHeight - 122) : (rect.top - 10);
       const bottom = Math.max(12, Math.round(window.innerHeight - bottomAnchor));
       const signature = `${right}|${bottom}|${isChatGpt ? 'chatgpt-stable' : 'anchor'}`;
       if (!force && steeringLastPositionSignature === signature) return;
