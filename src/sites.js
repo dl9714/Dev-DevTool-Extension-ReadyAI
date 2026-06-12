@@ -67,7 +67,7 @@
     return /^(\*|https?|file|ftp):\/\//i.test(p);
   }
   function escapeRegExp(value) {
-    return String(value).replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+    return String(value).replace(/[|\\{}()[\]^$+?.*]/g, '\\$&');
   }
   function matchPatternToRegExp(pattern) {
     const p = String(pattern || '').trim();

@@ -56,6 +56,8 @@ const CONFIG_SAVE_DEBOUNCE_MS = 120;
 const DASHBOARD_RELATIVE_TIME_BUCKET_MS = 30000;
 const DASHBOARD_SEARCH_DEBOUNCE_MS = 120;
 const CUSTOM_TAB_TITLE_MAX_LENGTH = 80;
+const DASHBOARD_LONG_RUNNING_MS = 10 * 60 * 1000;
+const SMART_BRIEFING_ITEM_LIMIT = 8;
 function soundPresetLabel(soundKey) {
   switch (soundKey) {
     case SOUND_PRESETS.off: return '없음';
@@ -224,11 +226,117 @@ function getVisibleDashboardSummary(items) {
   const queued = list.reduce((sum, item) => sum + Math.max(0, Number(item.steeringQueueCount) || 0), 0);
   return { total: list.length, orange, green, queued };
 }
+
+function getDashboardItemTitle(item) {
+  return String(item?.title || item?.siteName || getHostLabel(item?.url || '') || `탭 ${item?.tabId || ''}`).trim();
+}
+function getDashboardItemHost(item) {
+  return String(item?.host || getHostLabel(item?.url || '') || 'URL 없음').trim();
+}
+function formatDurationShort(ms) {
+  const sec = Math.max(0, Math.round((Number(ms) || 0) / 1000));
+  if (sec < 60) return `${sec}초`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}분`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}시간`;
+  const day = Math.round(hr / 24);
+  return `${day}일`;
+}
+function getDashboardRunningDurationMs(item, now = Date.now()) {
+  if (item?.status !== 'ORANGE') return 0;
+  const since = clampInt(item?.orangeSinceAt, 0, 0, Number.MAX_SAFE_INTEGER);
+  if (!since) return 0;
+  return Math.max(0, now - since);
+}
+function isLongRunningDashboardItem(item, now = Date.now()) {
+  return getDashboardRunningDurationMs(item, now) >= DASHBOARD_LONG_RUNNING_MS;
+}
+function getDashboardItemRunningLabel(item, now = Date.now()) {
+  const durationMs = getDashboardRunningDurationMs(item, now);
+  if (!durationMs) return '';
+  const label = `진행 ${formatDurationShort(durationMs)}`;
+  return isLongRunningDashboardItem(item, now) ? `${label} · 장기 진행` : label;
+}
+function getDashboardDynamicSuffixFromElement(el, fallbackSuffix = '') {
+  if (!el) return fallbackSuffix || '';
+  const staticSuffix = el.getAttribute('data-static-suffix') || fallbackSuffix || '';
+  const status = el.getAttribute('data-status') || '';
+  const orangeSinceAt = clampInt(el.getAttribute('data-orange-since-at'), 0, 0, Number.MAX_SAFE_INTEGER);
+  if (status !== 'ORANGE' || !orangeSinceAt) return staticSuffix;
+  const runningLabel = getDashboardItemRunningLabel({ status, orangeSinceAt });
+  return runningLabel ? ` · ${runningLabel}${staticSuffix}` : staticSuffix;
+}
+function buildSmartBriefingItemLine(item, now = Date.now()) {
+  const title = getDashboardItemTitle(item);
+  const host = getDashboardItemHost(item);
+  const status = statusLabel(item?.status);
+  const queueCount = Math.max(0, Number(item?.steeringQueueCount) || 0);
+  const runningLabel = getDashboardItemRunningLabel(item, now);
+  const customTitle = normalizeCustomTabTitleValue(item?.customTabTitle || '');
+  const meta = [item?.siteName || item?.platform || '미확인', host, runningLabel, queueCount ? `대기열 ${queueCount}` : '', customTitle ? `이름변경 ${customTitle}` : '']
+    .filter(Boolean)
+    .join(' · ');
+  const url = String(item?.url || '').trim();
+  return `- [${status}] ${title}${meta ? ` · ${meta}` : ''}${url ? `\n  ${url}` : ''}`;
+}
+function buildSmartDashboardBriefing(items, options = {}) {
+  const now = Date.now();
+  const list = Array.isArray(items) ? items.slice() : [];
+  const summary = getVisibleDashboardSummary(list);
+  const longRunning = list.filter((item) => isLongRunningDashboardItem(item, now));
+  const completed = list.filter((item) => item.status === 'GREEN');
+  const running = list.filter((item) => item.status === 'ORANGE');
+  const queued = list.filter((item) => Math.max(0, Number(item.steeringQueueCount) || 0) > 0);
+  const lines = [];
+  lines.push('Ready_Ai 스마트 브리핑');
+  lines.push(`생성: ${formatDateTime(now)}`);
+  lines.push(`범위: ${options.scopeLabel || '현재 표시 탭'} · ${summary.total}개`);
+  lines.push(`요약: 진행중 ${summary.orange} · 완료 ${summary.green} · 대기열 ${summary.queued} · 장기 진행 ${longRunning.length}`);
+  const recommendations = [];
+  if (completed.length) recommendations.push(`완료 탭 ${completed.length}개를 먼저 검토`);
+  if (longRunning.length) recommendations.push(`10분 이상 진행중 ${longRunning.length}개는 강제 확인 또는 탭 열기로 상태 재확인`);
+  if (queued.length) recommendations.push(`후속 지시 대기열이 있는 탭 ${queued.length}개는 전송 순서 확인`);
+  if (!recommendations.length && running.length) recommendations.push('진행중 탭 완료 알림 대기');
+  if (!recommendations.length) recommendations.push('현재 긴급 처리할 탭 없음');
+  lines.push('추천:');
+  recommendations.forEach((text) => lines.push(`- ${text}`));
+  const priority = [
+    ...longRunning,
+    ...completed.filter((item) => !longRunning.some((longItem) => longItem.tabId === item.tabId)),
+    ...running.filter((item) => !longRunning.some((longItem) => longItem.tabId === item.tabId)),
+    ...queued.filter((item) => !longRunning.some((longItem) => longItem.tabId === item.tabId) && !completed.some((doneItem) => doneItem.tabId === item.tabId) && !running.some((runItem) => runItem.tabId === item.tabId)),
+    ...list,
+  ];
+  const seen = new Set();
+  const uniquePriority = [];
+  for (const item of priority) {
+    const key = item?.tabId;
+    if (!Number.isFinite(key) || seen.has(key)) continue;
+    seen.add(key);
+    uniquePriority.push(item);
+    if (uniquePriority.length >= SMART_BRIEFING_ITEM_LIMIT) break;
+  }
+  if (uniquePriority.length) {
+    lines.push('우선 탭:');
+    uniquePriority.forEach((item) => lines.push(buildSmartBriefingItemLine(item, now)));
+  }
+  return lines.join('\n');
+}
+async function copySmartDashboardBriefing(items, options = {}) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) {
+    setHint('브리핑할 표시 탭이 없음', true);
+    return false;
+  }
+  return copyTextToClipboard(buildSmartDashboardBriefing(list, options), '스마트 브리핑 복사됨');
+}
+
 function buildDashboardListSignature(items, view) {
   const list = Array.isArray(items) ? items : [];
   return JSON.stringify({
     view: { filter: view?.filter || 'ALL', sort: view?.sort || 'status', search: view?.search || '' },
-    items: list.map((item) => [item.tabId, item.status, item.title || '', item.host || '', item.siteName || '', item.platform || '', item.lastUpdateAt || 0, item.steeringQueueCount || 0, !!item.active, !!item.discarded, !!item.hasCustomTabTitle, item.customTabTitle || '']),
+    items: list.map((item) => [item.tabId, item.status, item.title || '', item.host || '', item.siteName || '', item.platform || '', item.lastUpdateAt || 0, item.orangeSinceAt || 0, item.steeringQueueCount || 0, !!item.active, !!item.discarded, !!item.hasCustomTabTitle, item.customTabTitle || '']),
   });
 }
 function buildHistorySignature(history) {
@@ -373,6 +481,15 @@ function flushPendingConfigSave() {
     });
   });
 }
+function cancelPendingConfigSave() {
+  if (pendingConfigSaveTimer) {
+    clearTimeout(pendingConfigSaveTimer);
+    pendingConfigSaveTimer = null;
+  }
+  pendingConfigSavePayload = null;
+  pendingConfigSaveSignature = '';
+  pendingConfigSaveCallbacks = [];
+}
 function saveConfig(cfg, cb, options = {}) {
   const payload = buildConfigStoragePayload(cfg);
   const signature = JSON.stringify(payload);
@@ -411,7 +528,8 @@ function refreshRelativeTimeLabels(force = false) {
     }
     const prefix = el.getAttribute('data-prefix') || '';
     const suffix = el.getAttribute('data-suffix') || '';
-    el.textContent = `${prefix}${formatAgo(ts)}${suffix}`;
+    const dynamicSuffix = mode === 'dashboard' ? getDashboardDynamicSuffixFromElement(el, suffix) : suffix;
+    el.textContent = `${prefix}${formatAgo(ts)}${dynamicSuffix}`;
   });
 }
 function loadConfig(cb) {
@@ -1347,10 +1465,17 @@ function pQueryTabs(query) {
     }
   });
 }
-function pSendTabMessage(tabId, message) {
+function pSendTabMessage(tabId, message, options = null) {
   return new Promise((resolve) => {
     try {
-      chrome.tabs.sendMessage(tabId, message, (res) => {
+      const opts = options || {};
+      const targetOptions = opts.allFrames
+        ? {}
+        : { frameId: Number.isFinite(Number(opts.frameId)) ? Number(opts.frameId) : 0 };
+      const payload = opts.topFrameOnly === false
+        ? (message || {})
+        : { ...(message || {}), topFrameOnly: true };
+      chrome.tabs.sendMessage(tabId, payload, targetOptions, (res) => {
         if (chrome.runtime.lastError) {
           resolve({ ok: false, error: chrome.runtime.lastError.message || '메시지 전송 실패' });
           return;
@@ -1511,12 +1636,24 @@ function renderDashboardData(data, cfg) {
           sub.className = 'dash-sub';
           const queueLabel = item.steeringQueueCount ? ` · 대기열 ${item.steeringQueueCount}` : '';
           const pinLabel = item.hasCustomTabTitle ? ` · 변경: ${item.customTabTitle}` : '';
+          const staticSuffix = `${queueLabel}${pinLabel}`;
+          const dynamicSuffix = getDashboardDynamicSuffixFromElement({
+            getAttribute(name) {
+              if (name === 'data-static-suffix') return staticSuffix;
+              if (name === 'data-status') return item.status || '';
+              if (name === 'data-orange-since-at') return String(item.orangeSinceAt || 0);
+              return '';
+            },
+          }, staticSuffix);
           sub.setAttribute('data-role', 'relative-time');
           sub.setAttribute('data-mode', 'dashboard');
           sub.setAttribute('data-ts', String(item.lastUpdateAt || 0));
           sub.setAttribute('data-prefix', `${item.siteName || item.platform || '미확인'} · ${item.host || getHostLabel(item.url) || 'URL 없음'} · `);
-          sub.setAttribute('data-suffix', `${queueLabel}${pinLabel}`);
-          sub.textContent = `${item.siteName || item.platform || '미확인'} · ${item.host || getHostLabel(item.url) || 'URL 없음'} · ${formatAgo(item.lastUpdateAt)}${queueLabel}${pinLabel}`;
+          sub.setAttribute('data-suffix', staticSuffix);
+          sub.setAttribute('data-static-suffix', staticSuffix);
+          sub.setAttribute('data-status', item.status || '');
+          sub.setAttribute('data-orange-since-at', String(item.orangeSinceAt || 0));
+          sub.textContent = `${item.siteName || item.platform || '미확인'} · ${item.host || getHostLabel(item.url) || 'URL 없음'} · ${formatAgo(item.lastUpdateAt)}${dynamicSuffix}`;
           left.appendChild(title);
           left.appendChild(sub);
           const state = document.createElement('span');
@@ -1537,7 +1674,7 @@ function renderDashboardData(data, cfg) {
           forceBtn.type = 'button';
           forceBtn.textContent = '강제 확인';
           forceBtn.addEventListener('click', async () => {
-            const res = await pSendTabMessage(item.tabId, { action: 'force_check', reason: 'popup_dashboard' });
+            const res = await pSendTabMessage(item.tabId, { action: 'force_check', reason: 'popup_dashboard' }, { allFrames: true, topFrameOnly: false });
             setHint(res?.ok ? '강제 확인 요청 전송' : '강제 확인 요청 실패', !res?.ok);
           });
           const sendBtn = document.createElement('button');
@@ -1595,8 +1732,10 @@ function renderDashboardData(data, cfg) {
     }
   }
   const visibleSummary = getVisibleDashboardSummary(visibleItems);
+  const longRunningCount = visibleItems.filter((item) => isLongRunningDashboardItem(item)).length;
   const statsSignature = JSON.stringify({
     visibleSummary,
+    longRunningCount,
     totalOrange: runtimeSnapshot.items.filter((item) => item.status === 'ORANGE').length,
     totalGreen: runtimeSnapshot.items.filter((item) => item.status === 'GREEN').length,
     totalQueue: runtimeSnapshot.items.reduce((sum, item) => sum + Math.max(0, Number(item.steeringQueueCount) || 0), 0),
@@ -1611,7 +1750,7 @@ function renderDashboardData(data, cfg) {
   if (lastDashboardStatsSignature !== statsSignature) {
     lastDashboardStatsSignature = statsSignature;
     const bulkStatus = $('dashboard-bulk-status');
-    if (bulkStatus) bulkStatus.textContent = `현재 필터 기준 ${visibleSummary.total}개 · 진행중 ${visibleSummary.orange} · 완료 ${visibleSummary.green} · 대기열 ${visibleSummary.queued}`;
+    if (bulkStatus) bulkStatus.textContent = `현재 필터 기준 ${visibleSummary.total}개 · 진행중 ${visibleSummary.orange} · 완료 ${visibleSummary.green} · 대기열 ${visibleSummary.queued}${longRunningCount ? ` · 장기 진행 ${longRunningCount}` : ''}`;
     const visibleCount = $('dashboard-visible-count');
     if (visibleCount) visibleCount.textContent = `표시 ${visibleItems.length}`;
     const orangeCount = $('dashboard-orange-count');
@@ -1620,6 +1759,8 @@ function renderDashboardData(data, cfg) {
     if (greenCount) greenCount.textContent = `완료 ${runtimeSnapshot.items.filter((item) => item.status === 'GREEN').length}`;
     const queueCount = $('dashboard-queue-count');
     if (queueCount) queueCount.textContent = `대기열 ${runtimeSnapshot.items.reduce((sum, item) => sum + Math.max(0, Number(item.steeringQueueCount) || 0), 0)}`;
+    const attentionCount = $('dashboard-attention-count');
+    if (attentionCount) attentionCount.textContent = `주의 ${longRunningCount}`;
     const snoozeStatus = $('snooze-status');
     if (snoozeStatus) snoozeStatus.textContent = getRuntimeSuppressionLabel(cfg);
     const quietStatus = $('quiet-hours-status');
@@ -1805,6 +1946,8 @@ async function importSettingsFile(cfg) {
       setHint('JSON 형식이 올바르지 않음', true);
       return;
     }
+    cancelPendingConfigSave();
+    await sendRuntimeMessage({ action: 'reset_runtime_caches_for_storage_replace' });
     chrome.storage.local.set(parsed, () => {
       if (chrome.runtime.lastError) {
         setHint('설정 가져오기 실패', true);
@@ -2090,8 +2233,15 @@ function wireActions(cfg) {
     });
   });
   $('fill-current-pattern')?.addEventListener('click', () => fillPatternFromCurrentTab());
-  $('reset-defaults')?.addEventListener('click', () => {
+  $('reset-defaults')?.addEventListener('click', async () => {
+    cancelPendingConfigSave();
+    await sendRuntimeMessage({ action: 'reset_runtime_caches_for_storage_replace' });
     chrome.storage.local.clear(() => {
+      if (chrome.runtime.lastError) {
+        setHint('전체 설정 초기화 실패', true);
+        return;
+      }
+      lastSavedConfigSignature = '';
       setHint('전체 설정 초기화됨');
       setTimeout(() => window.location.reload(), 200);
     });
@@ -2276,6 +2426,10 @@ $('save-template')?.addEventListener('click', () => {
       return;
     }
     copyTextToClipboard(getVisibleDashboardLinksText(visible), '표시 탭 링크 복사됨');
+  });
+  $('dashboard-copy-smart-briefing')?.addEventListener('click', async () => {
+    await refreshRuntimeDashboard(cfg, true);
+    await copySmartDashboardBriefing(getVisibleDashboardItems(), { scopeLabel: '현재 표시 탭' });
   });
   $('dashboard-export-snapshot')?.addEventListener('click', async () => {
     await refreshRuntimeDashboard(cfg, true);

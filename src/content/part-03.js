@@ -148,9 +148,69 @@ function clearSteeringAwaitingResponseStart() {
   try { clearTimeout(steeringAwaitingResponseTimer); } catch (_) {}
   steeringAwaitingResponseTimer = null;
 }
+function clearSteeringTurnCompletionWatchdog() {
+  steeringTurnCompletionWatchdogStartedAt = 0;
+  if (!steeringTurnCompletionWatchdogTimer) return;
+  try { clearTimeout(steeringTurnCompletionWatchdogTimer); } catch (_) {}
+  steeringTurnCompletionWatchdogTimer = null;
+}
+function getSteeringTurnWatchdogDelayMs() {
+  return document.hidden ? STEERING_TURN_WATCHDOG_HIDDEN_MS : STEERING_TURN_WATCHDOG_VISIBLE_MS;
+}
+function isSteeringTurnWatchdogMature() {
+  if (!steeringAwaitingTurnCompletion || !steeringTurnCompletionWatchdogStartedAt) return false;
+  return Date.now() - steeringTurnCompletionWatchdogStartedAt >= getSteeringTurnWatchdogDelayMs();
+}
+function markSteeringGenerationObserved() {
+  if (!steeringAwaitingTurnCompletion) return;
+  steeringObservedGenerationSinceSend = true;
+  clearSteeringAwaitingResponseStart();
+}
+function recoverStaleSteeringTurnWait(reason = '') {
+  if (!monitoring || !steeringAwaitingTurnCompletion) return false;
+  try { maybeRescanShadowRoots(); } catch (_) {}
+  let generatingNow = false;
+  try {
+    generatingNow = !!(activeSite && detectGenerating(activeSite));
+  } catch (_) {
+    generatingNow = false;
+  }
+  if (generatingNow) {
+    if (!isGenerating) {
+      isGenerating = true;
+      completionStatus = 'idle';
+      steeringLastCompletionAt = 0;
+    }
+    markSteeringGenerationObserved();
+    armSteeringTurnCompletionWatchdog(getSteeringTurnWatchdogDelayMs());
+    updateTitleBadge();
+    updateSteeringUi();
+    return false;
+  }
+  if (isGenerating) isGenerating = false;
+  clearSteeringTurnCompletionWait();
+  clearSteeringAwaitingResponseStart();
+  completionStatus = 'completed';
+  steeringLastCompletionAt = Date.now();
+  updateTitleBadge();
+  updateSteeringUi();
+  scheduleSteeringQueueProcessing(STEERING_AUTO_SEND_DELAY_MS);
+  return true;
+}
+function armSteeringTurnCompletionWatchdog(ms = 0) {
+  clearSteeringTurnCompletionWatchdog();
+  if (!monitoring || !steeringAwaitingTurnCompletion) return;
+  steeringTurnCompletionWatchdogStartedAt = Date.now();
+  const delay = Math.max(5000, Number(ms) || getSteeringTurnWatchdogDelayMs());
+  steeringTurnCompletionWatchdogTimer = setTimeout(() => {
+    steeringTurnCompletionWatchdogTimer = null;
+    recoverStaleSteeringTurnWait('turn_watchdog');
+  }, delay);
+}
 function clearSteeringTurnCompletionWait() {
   steeringAwaitingTurnCompletion = false;
   steeringObservedGenerationSinceSend = false;
+  clearSteeringTurnCompletionWatchdog();
 }
 function armSteeringAwaitingResponseStart(ms = 15000) {
   clearSteeringAwaitingResponseStart();
@@ -158,6 +218,8 @@ function armSteeringAwaitingResponseStart(ms = 15000) {
   steeringAwaitingResponseTimer = setTimeout(() => {
     steeringAwaitingResponseStart = false;
     steeringAwaitingResponseTimer = null;
+    scheduleCheck(true);
+    if (steeringAwaitingTurnCompletion) armSteeringTurnCompletionWatchdog(getSteeringTurnWatchdogDelayMs());
     updateSteeringUi();
   }, Math.max(1500, ms));
 }
@@ -175,6 +237,14 @@ function hasActiveSteeringOffer() {
 }
 function canAutoSendSteeringNow() {
   return hasActiveSteeringOffer() && !steeringSendLock && !steeringProcessing && !steeringAwaitingResponseStart && !steeringAwaitingTurnCompletion;
+}
+function isSteeringQueueBlocked() {
+  if (!steeringQueue.length || canAutoSendSteeringNow()) return false;
+  if (steeringAwaitingResponseStart && !isSteeringTurnWatchdogMature()) return false;
+  return true;
+}
+function getSteeringResumeLabel() {
+  return isSteeringQueueBlocked() ? '즉시 재개' : '다음 전송';
 }
 function clearSteeringCompletionOffer() {
   if (completionStatus === 'completed') {
@@ -195,6 +265,11 @@ function getCurrentTitleBadgeGlyph() {
   if (completionStatus === 'completed') return TITLE_BADGE.GREEN;
   return TITLE_BADGE.WHITE;
 }
+function getCurrentTitleBadgeState() {
+  if (isGenerating) return 'running';
+  if (completionStatus === 'completed') return 'completed';
+  return 'idle';
+}
 function getSteeringLauncherText() {
   return steeringPanelOpen ? '후속 지시 닫기' : '후속 지시 열기';
 }
@@ -210,7 +285,7 @@ function getSteeringPrimaryLabel() {
     const hasFiles = typeof getSteeringDraftAttachmentCount === 'function' && getSteeringDraftAttachmentCount() > 0;
     return hasFiles ? '현재대화' : '새 채팅';
   }
-  return canAutoSendSteeringNow() ? 'Enter' : '입력대기';
+  return canAutoSendSteeringNow() ? 'Enter' : '입력 대기';
 }
 function setSteeringAdvancedEnabled(nextValue) {
   steeringAdvancedEnabled = !!nextValue;
@@ -236,9 +311,19 @@ function setSteeringNewChatTabCountValue(value, options = {}) {
 }
 function applySteeringTheme() {
   if (!steeringHost || !steeringRoot) return;
-  steeringHost.dataset.theme = steeringTheme;
-  const dock = steeringRoot.querySelector('.dock');
-  if (dock) dock.setAttribute('data-theme', steeringTheme);
+  const nextTheme = normalizeSteeringTheme(steeringTheme);
+  const dock = steeringRefs?.dock || steeringRoot.querySelector('.dock');
+  const signature = `${nextTheme}|${!!dock}`;
+  if (
+    steeringAppliedThemeSignature === signature
+    && steeringHost.dataset.theme === nextTheme
+    && (!dock || dock.getAttribute('data-theme') === nextTheme)
+  ) {
+    return;
+  }
+  if (steeringHost.dataset.theme !== nextTheme) steeringHost.dataset.theme = nextTheme;
+  if (dock && dock.getAttribute('data-theme') !== nextTheme) dock.setAttribute('data-theme', nextTheme);
+  steeringAppliedThemeSignature = signature;
 }
 function getSteeringAnchorElement() {
   const composer = getActiveComposer();
@@ -250,22 +335,36 @@ function getSteeringAnchorElement() {
   return composer;
 }
 function hasChatGptConversationTurns() {
+  const now = Date.now();
+  const ttl = document.hidden ? 3000 : 650;
+  if (steeringConversationTurnsCacheAt && now - steeringConversationTurnsCacheAt < ttl) {
+    return steeringConversationTurnsCacheValue;
+  }
   const selectors = [
     '[data-testid^="conversation-turn-"]',
     'article[data-testid*="conversation-turn"]',
     'main [data-message-author-role]',
   ];
+  const maxRecentTurns = 24;
+  let found = false;
   for (const selector of selectors) {
     const candidates = qsa(selector);
-    for (const el of candidates) {
+    const start = Math.max(0, candidates.length - maxRecentTurns);
+    for (let i = start; i < candidates.length; i++) {
+      const el = candidates[i];
       if (!isVisible(el)) continue;
       const author = String(el.getAttribute?.('data-message-author-role') || '').trim();
       const testId = String(el.getAttribute?.('data-testid') || '').trim();
-      if (author) return true;
-      if (/conversation-turn/i.test(testId)) return true;
+      if (author || /conversation-turn/i.test(testId)) {
+        found = true;
+        break;
+      }
     }
+    if (found) break;
   }
-  return false;
+  steeringConversationTurnsCacheAt = now;
+  steeringConversationTurnsCacheValue = found;
+  return found;
 }
 function shouldDockSteeringAtViewportBottom() {
   if (getSiteKey() !== 'chatgpt') return false;
@@ -273,6 +372,25 @@ function shouldDockSteeringAtViewportBottom() {
 }
 function positionSteeringUi(force = false) {
   if (!steeringHost) return;
+  const anchor = getSteeringAnchorElement();
+  if (anchor) {
+    try {
+      const rect = anchor.getBoundingClientRect();
+      const isChatGpt = getSiteKey() === 'chatgpt';
+      const chatGptRightShift = isChatGpt ? 250 : 0;
+      const right = Math.max(12, Math.round(window.innerWidth - rect.right - chatGptRightShift));
+      const bottomAnchor = isChatGpt ? (window.innerHeight - 92) : (rect.top - 10);
+      const bottom = Math.max(12, Math.round(window.innerHeight - bottomAnchor));
+      const signature = `${right}|${bottom}|${isChatGpt ? 'chatgpt-stable' : 'anchor'}`;
+      if (!force && steeringLastPositionSignature === signature) return;
+      steeringLastPositionSignature = signature;
+      steeringHost.style.left = 'auto';
+      steeringHost.style.transform = 'none';
+      steeringHost.style.right = `${right}px`;
+      steeringHost.style.bottom = `${bottom}px`;
+      return;
+    } catch (_) {}
+  }
   if (shouldDockSteeringAtViewportBottom()) {
     const bottomDockSignature = '18|18|bottomdock';
     if (!force && steeringLastPositionSignature === bottomDockSignature) return;
@@ -282,22 +400,6 @@ function positionSteeringUi(force = false) {
     steeringHost.style.right = '18px';
     steeringHost.style.bottom = '18px';
     return;
-  }
-  const anchor = getSteeringAnchorElement();
-  if (anchor) {
-    try {
-      const rect = anchor.getBoundingClientRect();
-      const right = Math.max(12, Math.round(window.innerWidth - rect.right));
-      const bottom = Math.max(12, Math.round(window.innerHeight - rect.top + 10));
-      const signature = `${right}|${bottom}`;
-      if (!force && steeringLastPositionSignature === signature) return;
-      steeringLastPositionSignature = signature;
-      steeringHost.style.left = 'auto';
-      steeringHost.style.transform = 'none';
-      steeringHost.style.right = `${right}px`;
-      steeringHost.style.bottom = `${bottom}px`;
-      return;
-    } catch (_) {}
   }
   const fallbackSignature = '18|140';
   if (!force && steeringLastPositionSignature === fallbackSignature) return;

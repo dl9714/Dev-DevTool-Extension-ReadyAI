@@ -1,4 +1,5 @@
 function markAsAcknowledged(event) {
+  if (completionStatus !== 'completed' || isGenerating) return;
   if (isSteeringTarget(event?.target)) return;
   acknowledgeCompletion();
 }
@@ -19,7 +20,7 @@ function bindHandlersOnce() {
   document.addEventListener('keydown', markTypingAcknowledged, true);
   document.addEventListener('input', markTypingAcknowledged, true);
   // 탭 활성/비활성 전환 시에도 상태 재평가(백그라운드 완료 감지 보강)
-  document.addEventListener('visibilitychange', () => { ensurePolling(true); scheduleCheck(); });
+  document.addEventListener('visibilitychange', () => { ensurePolling(true); armTitleBadgeStabilityWindow(1800); scheduleCheck(true); });
 }
 // shadow DOM deep-scan / deep-observe는 Gemini 완료 감지 보강용이 핵심이라
 // 기본은 Gemini에서만 켠다.
@@ -27,9 +28,29 @@ function shouldEnableDeepForSite(site) {
   const mode = site?.detection || site?.key || '';
   return mode === 'gemini' || site?.key === 'gemini';
 }
+function shouldObserveStatusAttributes(site) {
+  const mode = site?.detection || site?.key || '';
+  return mode !== 'chatgpt';
+}
+function bootstrapChatGptSafeModeTitleBadge() {
+  clearTitleBadgeStabilityWindow();
+  bindChatGptLightTitleBadgeTriggers();
+  startChatGptLightTitleBadgeKeepAlive();
+  loadSteeringPrefs(() => {
+    requestCustomTabTitleSync();
+    updateTitleBadge();
+    armChatGptLightTitleBadgeBurst();
+    sendChatGptLightStatusUpdate();
+    updateSteeringUi();
+  });
+}
 function startMonitoring(site) {
-  if (monitoring && activeSite?.key === site?.key) return;
   const nextSiteKey = String(site?.key || '');
+  const chatGptSafeModeCandidate = nextSiteKey === 'chatgpt' || isChatGptSafeMode();
+  if (monitoring && activeSite?.key === site?.key) {
+    if (chatGptSafeModeCandidate) bootstrapChatGptSafeModeTitleBadge();
+    return;
+  }
   if (steeringSessionSiteKey && steeringSessionSiteKey !== nextSiteKey) {
     resetSteeringSessionState(nextSiteKey);
   } else if (!steeringSessionSiteKey) {
@@ -41,36 +62,47 @@ function startMonitoring(site) {
   isGenerating = false;
   completionStatus = 'idle';
   hasSentInitialState = false;
+  const chatGptSafeMode = chatGptSafeModeCandidate;
   if (!hasCustomTabTitle()) nativePageTitle = getCleanDocumentTitleText() || activeSite?.name || 'AI';
-  ensureTitleSyncObserver();
+  if (!chatGptSafeMode) ensureTitleSyncObserver();
   clearSteeringAutoSendTimer();
   clearSteeringSendLock();
   steeringProcessing = false;
   clearSteeringAwaitingResponseStart();
   bindHandlersOnce();
+  if (chatGptSafeMode) {
+    bootstrapChatGptSafeModeTitleBadge();
+    return;
+  }
   // 오픈 shadowRoot deep query/observe 활성화
   try { setDeepEnabled(shouldEnableDeepForSite(site)); } catch (_) {}
   // DOM 변화를 감지하여 체크 실행
   _observer = new MutationObserver(() => {
+    if (getSiteKey() === 'chatgpt' && isGenerating) return;
     scheduleCheck();
   });
   try {
-    _observer.observe(document.body, {
+    const observeOptions = {
       childList: true,
       subtree: true,
+    };
+    if (shouldObserveStatusAttributes(site)) {
       // Gemini는 childList 변화 없이 style/class/aria-label만 바뀌는 경우가 있어
       // attributes 감시를 켜야 🟠 -> ⚪ 전환을 놓치지 않는다.
-      attributes: true,
-      attributeFilter: ['aria-label', 'style', 'class', 'hidden', 'disabled']
-    });
+      observeOptions.attributes = true;
+      observeOptions.attributeFilter = ['aria-label', 'style', 'class', 'hidden', 'disabled'];
+    }
+    _observer.observe(document.body, observeOptions);
   } catch (_) {
     // 일부 문서(특수 프레임)에서는 observe 실패할 수 있음
   }
   ensurePolling();
   loadSteeringPrefs(() => {
     requestCustomTabTitleSync();
+    armTitleBadgeStabilityWindow(2500);
+    updateTitleBadge();
     updateSteeringUi();
-    scheduleCheck();
+    scheduleCheck(true);
   });
 }
 function stopMonitoring() {
@@ -84,6 +116,11 @@ function stopMonitoring() {
     clearInterval(checkInterval);
     checkInterval = null;
   }
+  if (_checkTimer) {
+    try { clearTimeout(_checkTimer); } catch (_) {}
+    _checkTimer = null;
+  }
+  _checkScheduled = false;
   if (_observer) {
     try { _observer.disconnect(); } catch (_) {}
     _observer = null;
@@ -91,6 +128,23 @@ function stopMonitoring() {
   setDeepEnabled(false);
   _lastHeartbeatAt = 0;
   disconnectTitleSyncObserver();
+  clearTitleBadgeStabilityWindow();
+  stopChatGptLightTitleBadgeKeepAlive();
+  clearChatGptLightCompletionWatch();
+  if (titleGuardInstallRetryTimer) {
+    try { clearTimeout(titleGuardInstallRetryTimer); } catch (_) {}
+    titleGuardInstallRetryTimer = null;
+  }
+  if (titleGuardStateRetryTimer) {
+    try { clearTimeout(titleGuardStateRetryTimer); } catch (_) {}
+    titleGuardStateRetryTimer = null;
+  }
+  titleGuardStateRetryUntil = 0;
+  titleGuardInstallInFlight = false;
+  titleGuardInstalled = false;
+  titleBadgeLastLoopSyncAt = 0;
+  titleBadgeLastUiSyncAt = 0;
+  titleBadgeLastUiSyncSignature = '';
   clearTitleBadge();
   clearSteeringAutoSendTimer();
   clearSteeringSendLock();
@@ -150,9 +204,11 @@ function refreshSiteFromStorage() {
 try {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (changes.enabledSites || changes.customSites) loadSteeringPrefs(() => {
-  refreshSiteFromStorage();
-});
+    const siteConfigChanged = !!(changes.enabledSites || changes.customSites);
+    if (siteConfigChanged) loadSteeringPrefs(() => {
+      refreshSiteFromStorage();
+    });
+    if (!monitoring && !siteConfigChanged) return;
     if (Object.prototype.hasOwnProperty.call(changes, STEERING_STORAGE_KEYS.ENABLED)) {
       steeringEnabled = typeof changes[STEERING_STORAGE_KEYS.ENABLED]?.newValue === 'boolean' ? !!changes[STEERING_STORAGE_KEYS.ENABLED].newValue : true;
       updateSteeringUi();
@@ -191,10 +247,12 @@ try {
     }
     if (Object.prototype.hasOwnProperty.call(changes, TITLE_BADGE_STORAGE_KEYS.ENABLED)) {
       titleBadgeEnabled = typeof changes[TITLE_BADGE_STORAGE_KEYS.ENABLED]?.newValue === 'boolean' ? !!changes[TITLE_BADGE_STORAGE_KEYS.ENABLED].newValue : true;
+      armTitleBadgeStabilityWindow(1600);
       updateTitleBadge();
     }
     if (Object.prototype.hasOwnProperty.call(changes, TITLE_BADGE_STORAGE_KEYS.COUNT_ENABLED)) {
       titleBadgeCountEnabled = typeof changes[TITLE_BADGE_STORAGE_KEYS.COUNT_ENABLED]?.newValue === 'boolean' ? !!changes[TITLE_BADGE_STORAGE_KEYS.COUNT_ENABLED].newValue : true;
+      armTitleBadgeStabilityWindow(1600);
       updateTitleBadge();
     }
     if (changes.customTabTitles) {
@@ -209,15 +267,40 @@ try {
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg) return;
     if (msg.topFrameOnly && !IS_TOP_FRAME) return;
+    const action = String(msg.action || '');
+    const tabLevelSteeringAction = /^(send_steering_prompt_now|enqueue_steering_prompt|clear_steering_queue|process_steering_queue_now|get_steering_state)$/.test(action);
+    if (!IS_TOP_FRAME && tabLevelSteeringAction) return;
     if (msg.action === 'ping') {
       try { sendResponse?.({ ok: true, readyAiContentVersion: READY_AI_CONTENT_VERSION }); } catch (_) {}
       return;
     }
     if (msg.action === 'force_check') {
+      if (isChatGptSafeMode()) {
+        armChatGptLightTitleBadgeBurst();
+        if (detectChatGptGeneratingLight()) setChatGptLightGenerating(true, { observed: true });
+        try { sendResponse?.({ ok: true, skipped: true }); } catch (_) {}
+        return;
+      }
       // 상태는 polling/observer로도 갱신되지만,
       // Gemini는 탭 활성화 직후에 DOM이 크게 변하는 경우가 있어
       // background에서 "지금 한 번만" 더 체크하라고 신호를 줄 수 있게 한다.
-      scheduleCheck();
+      scheduleCheck(true);
+      try { sendResponse?.({ ok: true }); } catch (_) {}
+      return;
+    }
+    if (msg.action === 'force_title_sync') {
+      if (isChatGptSafeMode()) {
+        syncNativePageTitleFromDocumentTitle();
+        updateTitleBadge();
+        armChatGptLightTitleBadgeBurst();
+        try { sendResponse?.({ ok: true, lightweight: true }); } catch (_) {}
+        return;
+      }
+      requestTitleGuardInstall();
+      publishTitleGuardState({ force: true });
+      reconcileDesiredDocumentTitleFromMutation();
+      armTitleBadgeStabilityWindow(1600);
+      updateTitleBadge();
       try { sendResponse?.({ ok: true }); } catch (_) {}
       return;
     }
@@ -280,6 +363,19 @@ try {
       return;
     }
     if (msg.action === 'process_steering_queue_now') {
+      if (msg.forceResume) {
+        Promise.resolve(resumeSteeringQueueNow({ source: 'message' }))
+          .then((ok) => {
+            try { sendResponse?.({ ok: !!ok, count: steeringQueue.length }); } catch (_) {}
+          })
+          .catch(() => {
+            try { sendResponse?.({ ok: false, count: steeringQueue.length }); } catch (_) {}
+          });
+        return true;
+      }
+      if (isSteeringTurnWatchdogMature()) {
+        recoverStaleSteeringTurnWait('process_request');
+      }
       Promise.resolve(processSteeringQueue({ source: 'manual' }))
         .then((ok) => {
           try { sendResponse?.({ ok: !!ok, count: steeringQueue.length }); } catch (_) {}

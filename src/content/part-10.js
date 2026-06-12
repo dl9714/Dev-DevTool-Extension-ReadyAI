@@ -6,7 +6,7 @@ var STEERING_UI_MARKUP_TEMPLATE = `
           <span class="launcher-text">
             <span class="launcher-title-row">
               <strong id="ready-ai-steering-launcher-title">후속 지시 열기</strong>
-              <span class="launcher-count" id="ready-ai-steering-launcher-count">대기 : 0</span>
+              <span class="launcher-count" id="ready-ai-steering-launcher-count">대기중: 0</span>
             </span>
             <small id="ready-ai-steering-launcher-sub">항상 열어둘 수 있는 후속 지시 패널</small>
           </span>
@@ -17,7 +17,7 @@ var STEERING_UI_MARKUP_TEMPLATE = `
           <div class="top-main">
             <div class="title-row">
               <div class="title" id="ready-ai-steering-title"></div>
-              <div class="meta" id="ready-ai-steering-meta">대기 : 0</div>
+              <div class="meta" id="ready-ai-steering-meta">대기중: 0</div>
             </div>
           </div>
           <button class="icon-btn" type="button" id="ready-ai-steering-close" aria-label="접기">×</button>
@@ -108,6 +108,7 @@ var STEERING_UI_MARKUP_TEMPLATE = `
         <div class="queue-head">
           <div class="queue-label">대기 목록</div>
           <div class="queue-head-actions">
+            <button class="queue-head-btn resume" type="button" id="ready-ai-steering-resume-now">즉시 재개</button>
             <button class="queue-head-btn" type="button" id="ready-ai-steering-run-next">다음 전송</button>
             <button class="queue-head-btn danger" type="button" id="ready-ai-steering-clear-queue">모두 삭제</button>
           </div>
@@ -148,12 +149,16 @@ function createSteeringUiHost() {
   steeringHost.style.left = 'auto';
   steeringHost.style.transform = 'none';
   steeringHost.style.zIndex = '2147483647';
+  steeringHost.style.pointerEvents = 'none';
   steeringHost.style.display = 'none';
   steeringRoot = steeringHost.attachShadow({ mode: 'open' });
   steeringRoot.innerHTML = STEERING_UI_STYLE_TEMPLATE_A + STEERING_UI_STYLE_TEMPLATE_B + STEERING_UI_MARKUP_TEMPLATE;
+  steeringAppliedThemeSignature = '';
+  steeringLastPositionSignature = '';
 }
 function buildSteeringRefs() {
   steeringRefs = {
+    dock: steeringRoot.querySelector('.dock'),
     title: steeringRoot.getElementById('ready-ai-steering-title'),
     meta: steeringRoot.getElementById('ready-ai-steering-meta'),
     launcherCount: steeringRoot.getElementById('ready-ai-steering-launcher-count'),
@@ -202,6 +207,7 @@ function buildSteeringRefs() {
     clear: steeringRoot.getElementById('ready-ai-steering-clear'),
     queueWrap: steeringRoot.getElementById('ready-ai-steering-queue-wrap'),
     queue: steeringRoot.getElementById('ready-ai-steering-queue'),
+    resumeNow: steeringRoot.getElementById('ready-ai-steering-resume-now'),
     runNext: steeringRoot.getElementById('ready-ai-steering-run-next'),
     clearQueue: steeringRoot.getElementById('ready-ai-steering-clear-queue'),
     close: steeringRoot.getElementById('ready-ai-steering-close'),
@@ -396,14 +402,20 @@ function bindSteeringUiEvents() {
       try { refs.input.value = ''; } catch (_) {}
       clearSteeringDraftAttachments();
     }
-    const ok = await processSteeringQueue({ source: 'manual' });
+    const ok = canAutoSendSteeringNow()
+      ? await processSteeringQueue({ source: 'manual' })
+      : await resumeSteeringQueueNow({ source: 'resume_button' });
     if (!ok && !steeringQueue.length) setSteeringStatus('전송할 대기가 없습니다.', true);
   }));
   steeringRefs.clear.addEventListener('click', consume(() => {
     clearSteeringQueue(true);
   }));
+  steeringRefs.resumeNow?.addEventListener('click', consume(async () => {
+    const ok = await resumeSteeringQueueNow({ source: 'resume_button' });
+    if (!ok && !steeringQueue.length) setSteeringStatus('전송할 대기가 없습니다.', true);
+  }));
   steeringRefs.runNext.addEventListener('click', consume(async () => {
-    const ok = await processSteeringQueue({ source: 'manual' });
+    const ok = await resumeSteeringQueueNow({ source: 'resume_button' });
     if (!ok) setSteeringStatus(steeringQueue.length ? '지금은 전송할 수 없습니다.' : '전송할 대기가 없습니다.', true);
   }));
   steeringRefs.clearQueue.addEventListener('click', consume(() => {

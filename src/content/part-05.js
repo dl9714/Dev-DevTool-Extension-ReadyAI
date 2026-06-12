@@ -31,7 +31,7 @@ function getSteeringQueueCountText() {
   return count > 99 ? '99+' : String(count);
 }
 function getSteeringQueueCountLabel() {
-  return `대기 : ${getSteeringQueueCountText()}`;
+  return `대기중: ${getSteeringQueueCountText()}`;
 }
 function syncSteeringQueueCount(force = false) {
   const count = Math.max(0, Number(steeringQueue.length) || 0);

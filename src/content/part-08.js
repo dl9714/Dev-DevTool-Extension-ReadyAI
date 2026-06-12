@@ -1,6 +1,9 @@
 var STEERING_UI_STYLE_TEMPLATE_A = `
     <style>
-      :host { all: initial; }
+      :host {
+        all: initial;
+        pointer-events: none;
+      }
       .dock {
         display: flex;
         flex-direction: column-reverse;
@@ -15,6 +18,12 @@ var STEERING_UI_STYLE_TEMPLATE_A = `
         justify-content: flex-end;
         gap: 8px;
         width: min(400px, calc(100vw - 28px));
+      }
+      .launcher,
+      .card,
+      .queue-wrap,
+      .attachment-preview {
+        pointer-events: auto;
       }
       .dock[data-theme="light"] {
         color: #0f172a;
@@ -291,12 +300,22 @@ var STEERING_UI_STYLE_TEMPLATE_A = `
         font-weight: 700;
         cursor: pointer;
       }
+      .queue-head-btn.resume {
+        border-color: rgba(45, 212, 191, 0.44);
+        background: rgba(20, 184, 166, 0.18);
+        color: #ccfbf1;
+      }
       .queue-head-btn.danger {
         color: #fca5a5;
       }
       .dock[data-theme="light"] .queue-head-btn {
         background: rgba(248, 250, 252, 0.95);
         color: #475569;
+      }
+      .dock[data-theme="light"] .queue-head-btn.resume {
+        background: #ccfbf1;
+        border-color: #5eead4;
+        color: #115e59;
       }
       .queue-label {
         font-size: 10px;

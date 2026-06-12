@@ -276,7 +276,9 @@ function finalizeDirectSteeringSend(source) {
     steeringAwaitingTurnCompletion = true;
     steeringObservedGenerationSinceSend = false;
     armSteeringAwaitingResponseStart();
+    armSteeringTurnCompletionWatchdog();
     armSteeringSendLock();
+    if (isChatGptSafeMode()) setChatGptLightGenerating(true, { observed: false });
   } else {
     clearSteeringTurnCompletionWait();
     clearSteeringAwaitingResponseStart();
@@ -378,7 +380,9 @@ async function processSteeringQueue(options = {}) {
     steeringAwaitingTurnCompletion = true;
     steeringObservedGenerationSinceSend = false;
     armSteeringAwaitingResponseStart();
+    armSteeringTurnCompletionWatchdog();
     armSteeringSendLock();
+    if (isChatGptSafeMode()) setChatGptLightGenerating(true, { observed: false });
     setSteeringStatus(options.source === 'auto' ? '자동 전송했습니다.' : '전송했습니다.');
     setSteeringDraftText('');
     try { if (steeringRefs?.input) steeringRefs.input.value = ''; } catch (_) {}
@@ -389,6 +393,53 @@ async function processSteeringQueue(options = {}) {
     steeringProcessing = false;
     updateSteeringUi();
   }
+}
+async function resumeSteeringQueueNow(options = {}) {
+  if (!monitoring || !steeringEnabled) return false;
+  if (!steeringQueue.length) {
+    setSteeringStatus('전송할 대기열이 없습니다.', true);
+    updateSteeringUi();
+    return false;
+  }
+  if (steeringProcessing) {
+    setSteeringStatus('전송 처리 중입니다.');
+    updateSteeringUi();
+    return false;
+  }
+  try { maybeRescanShadowRoots(); } catch (_) {}
+  let generatingNow = false;
+  try {
+    generatingNow = !!(activeSite && detectGenerating(activeSite));
+  } catch (_) {
+    generatingNow = false;
+  }
+  if (generatingNow) {
+    isGenerating = true;
+    completionStatus = 'idle';
+    markSteeringGenerationObserved();
+    armSteeringTurnCompletionWatchdog(getSteeringTurnWatchdogDelayMs());
+    setSteeringStatus('아직 답변 중입니다. 완료되면 다음 지시를 보냅니다.');
+    updateTitleBadge();
+    updateSteeringUi();
+    return false;
+  }
+  if (steeringAwaitingResponseStart && !isSteeringTurnWatchdogMature()) {
+    if (!steeringTurnCompletionWatchdogStartedAt) armSteeringTurnCompletionWatchdog(getSteeringTurnWatchdogDelayMs());
+    scheduleCheck(true);
+    setSteeringStatus('방금 보낸 답변 시작을 확인 중입니다.');
+    updateSteeringUi();
+    return false;
+  }
+  clearSteeringAutoSendTimer();
+  clearSteeringSendLock();
+  clearSteeringAwaitingResponseStart();
+  clearSteeringTurnCompletionWait();
+  isGenerating = false;
+  if (completionStatus === 'completed') completionStatus = 'idle';
+  setSteeringStatus(options.source === 'resume_button' ? '즉시 재개합니다.' : '대기열 전송을 재개합니다.');
+  updateTitleBadge();
+  updateSteeringUi();
+  return await processSteeringQueue({ source: options.source || 'manual' });
 }
 function submitSteeringInputToNewChats() {
   const refs = ensureSteeringUi();

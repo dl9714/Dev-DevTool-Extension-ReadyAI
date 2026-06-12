@@ -56,14 +56,17 @@ const STORAGE_KEYS = {
   CHATGPT_RATE_LIMIT_UNTIL: 'chatGptRateLimitUntil',
 };
 const GEMINI_PROBE_ALARM = 'ready_ai_gemini_probe';
+const STEERING_QUEUE_PROBE_ALARM = 'ready_ai_steering_queue_probe';
 const GEMINI_PROBE_MIN_PERIOD_MIN = 1; // chrome.alarms 최소 1분
+const STEERING_QUEUE_PROBE_MIN_PERIOD_MIN = 1;
 const GEMINI_PROBE_NUDGE_COOLDOWN_MS = 30_000; // 너무 자주 탭 전환하면 거슬림
 const CHATGPT_NEW_CHAT_TAB_GAP_MS = 7_000;
 const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
-const READY_AI_CONTENT_VERSION = '2026-04-26-new-chat-reuse-v10';
+const READY_AI_CONTENT_VERSION = '2026-06-12.3-followup-safe-resume';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
+const TITLE_GUARD_MAIN_FILE = 'src/content/title-guard-main.js';
 const CONTENT_SCRIPT_FILES = Object.freeze([
   'src/sites.js',
   'src/content/part-01.js',
@@ -87,7 +90,7 @@ const SOUND_PRESETS = Object.freeze({
   long: 'long',
   custom: 'custom',
 });
-let settings = {
+const DEFAULT_SETTINGS = Object.freeze({
   dndMode: false,
   badgeEnabled: false,
   badgeCountEnabled: false,
@@ -112,7 +115,8 @@ let settings = {
   quietHoursEnabled: false,
   quietHoursStart: '23:00',
   quietHoursEnd: '08:00',
-};
+});
+let settings = { ...DEFAULT_SETTINGS };
 const notificationTargets = {};
 let batchWave = {
   active: false,
@@ -141,6 +145,9 @@ let dashboardItemsCacheVersion = 0;
 let dashboardItemsCache = [];
 const CUSTOM_TAB_TITLE_MAX_LENGTH = 80;
 const LAST_UPDATE_HEARTBEAT_THROTTLE_MS = 30_000;
+function titleHasReadyAiPrefix(title) {
+  return /^[⚪🔵🟠🟢]/u.test(String(title || '').trimStart());
+}
 function refreshDashboardMetaCache() {
   const states = Object.values(tabStates);
   dashboardMetaCache = {
@@ -330,6 +337,11 @@ function clockTimeToMinutes(value, fallback = 0) {
   const [hh, mm] = normalized.split(':').map((v) => parseInt(v, 10) || 0);
   return (hh * 60) + mm;
 }
+function getStorageChangeValue(changes, key, fallback) {
+  const change = changes?.[key];
+  if (!change || !Object.prototype.hasOwnProperty.call(change, 'newValue')) return fallback;
+  return change.newValue === undefined ? fallback : change.newValue;
+}
 function isQuietHoursActive(ts = Date.now()) {
   if (!settings.quietHoursEnabled) return false;
   const start = clockTimeToMinutes(settings.quietHoursStart, 23 * 60);
@@ -364,7 +376,11 @@ function pushCompletionHistory(entry) {
 function pTabsQuery(query) {
   return new Promise((resolve) => {
     try {
-      chrome.tabs.query(query, (tabs) => resolve(Array.isArray(tabs) ? tabs : []));
+      chrome.tabs.query(query, (tabs) => {
+        const list = Array.isArray(tabs) ? tabs : [];
+        for (const tab of list) upsertTabMetaFromTab(tab);
+        resolve(list);
+      });
     } catch (_) {
       resolve([]);
     }
@@ -373,7 +389,10 @@ function pTabsQuery(query) {
 function pTabsUpdate(tabId, updateProps) {
   return new Promise((resolve) => {
     try {
-      chrome.tabs.update(tabId, updateProps, (tab) => resolve(tab || null));
+      chrome.tabs.update(tabId, updateProps, (tab) => {
+        if (tab) upsertTabMetaFromTab(tab);
+        resolve(tab || null);
+      });
     } catch (_) {
       resolve(null);
     }
@@ -468,6 +487,13 @@ function pTabsSendMessageResult(tabId, message, timeoutMs = 0, options = null) {
 }
 function upsertTabMetaFromTab(tab) {
   if (!tab || typeof tab.id !== 'number') return;
+  if (tab.active && typeof tab.windowId === 'number') {
+    for (const id of Object.keys(tabMetaCache)) {
+      if (Number(id) !== tab.id && tabMetaCache[id]?.windowId === tab.windowId) {
+        tabMetaCache[id] = { ...(tabMetaCache[id] || {}), active: false };
+      }
+    }
+  }
   tabMetaCache[tab.id] = {
     ...(tabMetaCache[tab.id] || {}),
     id: tab.id,
@@ -544,6 +570,26 @@ function pScriptingExec(tabId, files, allFrames = true) {
     }
   });
 }
+function pScriptingExecMainFiles(tabId, files, allFrames = false) {
+  return new Promise((resolve) => {
+    try {
+      if (!chrome.scripting?.executeScript) return resolve(false);
+      chrome.scripting.executeScript(
+        {
+          target: { tabId, allFrames: !!allFrames },
+          files: Array.isArray(files) ? files : [files],
+          world: 'MAIN',
+        },
+        () => {
+          if (chrome.runtime.lastError) return resolve(false);
+          resolve(true);
+        }
+      );
+    } catch (_) {
+      resolve(false);
+    }
+  });
+}
 function pScriptingExecMainFunction(tabId, func, args = []) {
   return new Promise((resolve) => {
     const run = (withMainWorld) => {
@@ -571,11 +617,28 @@ function pScriptingExecMainFunction(tabId, func, args = []) {
     run(true);
   });
 }
+async function ensureMainWorldTitleGuard(tabId) {
+  if (typeof tabId !== 'number') return false;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (isChatGptUrl(tab?.url || '')) return false;
+  } catch (_) {}
+  const alreadyInstalled = await pScriptingExecMainFunction(tabId, () => !!window.__ReadyAiTitleGuardV7 || !!window.__ReadyAiTitleGuardV6 || !!window.__ReadyAiTitleGuardV5 || !!window.__ReadyAiTitleGuardV4 || !!window.__ReadyAiTitleGuardV3);
+  if (alreadyInstalled) return true;
+  const injected = await pScriptingExecMainFiles(tabId, TITLE_GUARD_MAIN_FILE, false);
+  if (!injected) return false;
+  const installed = await pScriptingExecMainFunction(tabId, () => !!window.__ReadyAiTitleGuardV7 || !!window.__ReadyAiTitleGuardV6 || !!window.__ReadyAiTitleGuardV5 || !!window.__ReadyAiTitleGuardV4 || !!window.__ReadyAiTitleGuardV3);
+  return !!installed;
+}
 function pRuntimeSendMessage(message) {
   return new Promise((resolve) => {
     try {
-      chrome.runtime.sendMessage(message, () => {
+      chrome.runtime.sendMessage(message, (response) => {
         if (chrome.runtime.lastError) return resolve(false);
+        if (response && Object.prototype.hasOwnProperty.call(response, 'ok')) {
+          resolve(!!response.ok);
+          return;
+        }
         resolve(true);
       });
     } catch (_) {
@@ -666,11 +729,15 @@ async function ensureContentScripts(tab, options = {}) {
   const injectAllFrames = options.allFrames !== false;
   // 1) ping으로 content 존재 확인. 구버전 content script는 버전이 없으므로 재주입한다.
   const alive = await pTabsSendMessageResult(tabId, { action: 'ping', topFrameOnly }, 1500, messageOptions);
-  if (alive?.ok && alive.readyAiContentVersion === READY_AI_CONTENT_VERSION && !options.forceInject) return true;
+  if (alive?.ok && alive.readyAiContentVersion === READY_AI_CONTENT_VERSION && !options.forceInject) {
+    if (site?.key !== 'chatgpt') await ensureMainWorldTitleGuard(tabId);
+    return true;
+  }
   // 2) 없으면 강제 주입(필요 권한: "scripting")
   let injected = await pScriptingExec(tabId, CONTENT_SCRIPT_FILES, injectAllFrames);
   if (!injected && injectAllFrames) injected = await pScriptingExec(tabId, CONTENT_SCRIPT_FILES, false);
   if (!injected) return false;
+  if (site?.key !== 'chatgpt') await ensureMainWorldTitleGuard(tabId);
   // 3) 주입 직후 즉시 체크 요청
   const reinjected = await pTabsSendMessageResult(tabId, { action: 'ping', topFrameOnly }, 1500, messageOptions);
   await pTabsSendMessage(tabId, { action: 'force_check', reason: 'inject' }, messageOptions);
@@ -1341,7 +1408,7 @@ async function enqueuePromptInNewChatTab(tab, text) {
   if (!ready) {
     return { ok: false, tabId: tab.id, message: directResult?.message || '새 채팅 탭 준비 시간 초과' };
   }
-  for (let attempt = 0; attempt < 1; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     const response = await pTabsSendMessageResult(tab.id, {
       action: 'send_steering_prompt_now',
       text,
@@ -1489,16 +1556,35 @@ function pIdleQueryState(idleSec) {
     }
   });
 }
-function clearBadgesForAllTabs() {
+function clearBadgesForAllTabs(options = {}) {
   actionStateCache = {};
-  // Chrome 확장 아이콘 위의 작은 색 배지는 쓰지 않는다.
+  // Legacy completion badges are disabled; queue count badges are restored by updateIcon.
   safeActionCall(chrome.action.setBadgeText({ text: '' }));
   chrome.tabs.query({}, (tabs) => {
     for (const t of tabs) {
       if (!t || typeof t.id !== 'number') continue;
       safeActionCall(chrome.action.setBadgeText({ text: '', tabId: t.id }));
     }
+    if (options.restoreQueueBadges) refreshTrackedTabs();
   });
+}
+function resetRuntimeCachesForStorageReplace() {
+  if (completionHistoryFlushTimer) {
+    try { clearTimeout(completionHistoryFlushTimer); } catch (_) {}
+    completionHistoryFlushTimer = null;
+  }
+  if (customTabTitlesFlushTimer) {
+    try { clearTimeout(customTabTitlesFlushTimer); } catch (_) {}
+    customTabTitlesFlushTimer = null;
+  }
+  settings = { ...DEFAULT_SETTINGS };
+  completionHistoryCache = [];
+  customTabTitles = {};
+  lastPersistedCustomTabTitlesSignature = JSON.stringify(customTabTitles);
+  chatGptNewChatRateLimitUntil = 0;
+  clearBadgesForAllTabs({ restoreQueueBadges: true });
+  ensureGeminiProbeAlarm();
+  bumpDashboardVersion();
 }
 function refreshTrackedTabs() {
   // 현재 상태를 알고 있는 탭(= tabStates)에 대해서만 아이콘을 다시 반영
@@ -1584,10 +1670,11 @@ chrome.storage.local.get([
   ensureGeminiProbeAlarm();
 });
 // 설정 변경 감지 (Popup에서 변경 시)
-chrome.storage.onChanged.addListener((changes) => {
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName && areaName !== 'local') return;
   let dashboardRelevantChanged = false;
   if (changes[STORAGE_KEYS.DND_MODE]) {
-    settings.dndMode = changes[STORAGE_KEYS.DND_MODE].newValue;
+    settings.dndMode = !!getStorageChangeValue(changes, STORAGE_KEYS.DND_MODE, DEFAULT_SETTINGS.dndMode);
     dashboardRelevantChanged = true;
   }
   if (changes.enabledSites || changes.customSites) {
@@ -1595,60 +1682,64 @@ chrome.storage.onChanged.addListener((changes) => {
     getSiteConfig(() => purgeDisabledTabs());
   }
   if (changes[STORAGE_KEYS.CUSTOM_TAB_TITLES]) {
-    customTabTitles = normalizeCustomTabTitlesMap(changes[STORAGE_KEYS.CUSTOM_TAB_TITLES].newValue);
+    customTabTitles = normalizeCustomTabTitlesMap(getStorageChangeValue(changes, STORAGE_KEYS.CUSTOM_TAB_TITLES, {}));
+    lastPersistedCustomTabTitlesSignature = JSON.stringify(customTabTitles);
     dashboardRelevantChanged = true;
   }
   if (changes[STORAGE_KEYS.BADGE_ENABLED]) {
     settings.badgeEnabled = false;
-    clearBadgesForAllTabs();
+    clearBadgesForAllTabs({ restoreQueueBadges: true });
   }
   if (changes[STORAGE_KEYS.BADGE_COUNT_ENABLED]) {
     settings.badgeCountEnabled = false;
-    clearBadgesForAllTabs();
+    clearBadgesForAllTabs({ restoreQueueBadges: true });
   }
   if (changes[STORAGE_KEYS.COMPLETION_HISTORY_ENABLED]) {
-    settings.completionHistoryEnabled = !!changes[STORAGE_KEYS.COMPLETION_HISTORY_ENABLED].newValue;
+    settings.completionHistoryEnabled = !!getStorageChangeValue(changes, STORAGE_KEYS.COMPLETION_HISTORY_ENABLED, DEFAULT_SETTINGS.completionHistoryEnabled);
     if (!settings.completionHistoryEnabled) {
       completionHistoryCache = [];
       try { chrome.storage.local.set({ [STORAGE_KEYS.COMPLETION_HISTORY]: [] }); } catch (_) {}
     }
     dashboardRelevantChanged = true;
   }
-  if (changes[STORAGE_KEYS.INDIVIDUAL_COMPLETION_NOTIFICATION_ENABLED]) settings.individualCompletionNotificationEnabled = !!changes[STORAGE_KEYS.INDIVIDUAL_COMPLETION_NOTIFICATION_ENABLED].newValue;
-  if (changes[STORAGE_KEYS.INDIVIDUAL_COMPLETION_SOUND]) settings.individualCompletionSound = normalizeSoundKey(changes[STORAGE_KEYS.INDIVIDUAL_COMPLETION_SOUND].newValue, SOUND_PRESETS.soft);
-  if (changes[STORAGE_KEYS.BATCH_COMPLETION_NOTIFICATION_ENABLED]) settings.batchCompletionNotificationEnabled = !!changes[STORAGE_KEYS.BATCH_COMPLETION_NOTIFICATION_ENABLED].newValue;
-  if (changes[STORAGE_KEYS.BATCH_COMPLETION_SOUND]) settings.batchCompletionSound = normalizeSoundKey(changes[STORAGE_KEYS.BATCH_COMPLETION_SOUND].newValue, SOUND_PRESETS.triple);
-  if (changes[STORAGE_KEYS.BATCH_COMPLETION_THRESHOLD]) settings.batchCompletionThreshold = clampInt(changes[STORAGE_KEYS.BATCH_COMPLETION_THRESHOLD].newValue, 4, 2, 99);
-  if (changes[STORAGE_KEYS.INDIVIDUAL_COMPLETION_VOLUME]) settings.individualCompletionVolume = normalizeVolume(changes[STORAGE_KEYS.INDIVIDUAL_COMPLETION_VOLUME].newValue, 0.75);
-  if (changes[STORAGE_KEYS.BATCH_COMPLETION_VOLUME]) settings.batchCompletionVolume = normalizeVolume(changes[STORAGE_KEYS.BATCH_COMPLETION_VOLUME].newValue, 0.9);
-  if (changes[STORAGE_KEYS.INDIVIDUAL_COMPLETION_CUSTOM_SOUND_DATA_URL]) settings.individualCompletionCustomSoundDataUrl = String(changes[STORAGE_KEYS.INDIVIDUAL_COMPLETION_CUSTOM_SOUND_DATA_URL].newValue || '');
-  if (changes[STORAGE_KEYS.BATCH_COMPLETION_CUSTOM_SOUND_DATA_URL]) settings.batchCompletionCustomSoundDataUrl = String(changes[STORAGE_KEYS.BATCH_COMPLETION_CUSTOM_SOUND_DATA_URL].newValue || '');
-  if (changes[STORAGE_KEYS.INDIVIDUAL_COMPLETION_CUSTOM_SOUND_NAME]) settings.individualCompletionCustomSoundName = String(changes[STORAGE_KEYS.INDIVIDUAL_COMPLETION_CUSTOM_SOUND_NAME].newValue || '');
-  if (changes[STORAGE_KEYS.BATCH_COMPLETION_CUSTOM_SOUND_NAME]) settings.batchCompletionCustomSoundName = String(changes[STORAGE_KEYS.BATCH_COMPLETION_CUSTOM_SOUND_NAME].newValue || '');
+  if (changes[STORAGE_KEYS.INDIVIDUAL_COMPLETION_NOTIFICATION_ENABLED]) settings.individualCompletionNotificationEnabled = !!getStorageChangeValue(changes, STORAGE_KEYS.INDIVIDUAL_COMPLETION_NOTIFICATION_ENABLED, DEFAULT_SETTINGS.individualCompletionNotificationEnabled);
+  if (changes[STORAGE_KEYS.INDIVIDUAL_COMPLETION_SOUND]) settings.individualCompletionSound = normalizeSoundKey(getStorageChangeValue(changes, STORAGE_KEYS.INDIVIDUAL_COMPLETION_SOUND, DEFAULT_SETTINGS.individualCompletionSound), SOUND_PRESETS.soft);
+  if (changes[STORAGE_KEYS.BATCH_COMPLETION_NOTIFICATION_ENABLED]) settings.batchCompletionNotificationEnabled = !!getStorageChangeValue(changes, STORAGE_KEYS.BATCH_COMPLETION_NOTIFICATION_ENABLED, DEFAULT_SETTINGS.batchCompletionNotificationEnabled);
+  if (changes[STORAGE_KEYS.BATCH_COMPLETION_SOUND]) settings.batchCompletionSound = normalizeSoundKey(getStorageChangeValue(changes, STORAGE_KEYS.BATCH_COMPLETION_SOUND, DEFAULT_SETTINGS.batchCompletionSound), SOUND_PRESETS.triple);
+  if (changes[STORAGE_KEYS.BATCH_COMPLETION_THRESHOLD]) settings.batchCompletionThreshold = clampInt(getStorageChangeValue(changes, STORAGE_KEYS.BATCH_COMPLETION_THRESHOLD, DEFAULT_SETTINGS.batchCompletionThreshold), 4, 2, 99);
+  if (changes[STORAGE_KEYS.INDIVIDUAL_COMPLETION_VOLUME]) settings.individualCompletionVolume = normalizeVolume(getStorageChangeValue(changes, STORAGE_KEYS.INDIVIDUAL_COMPLETION_VOLUME, DEFAULT_SETTINGS.individualCompletionVolume), 0.75);
+  if (changes[STORAGE_KEYS.BATCH_COMPLETION_VOLUME]) settings.batchCompletionVolume = normalizeVolume(getStorageChangeValue(changes, STORAGE_KEYS.BATCH_COMPLETION_VOLUME, DEFAULT_SETTINGS.batchCompletionVolume), 0.9);
+  if (changes[STORAGE_KEYS.INDIVIDUAL_COMPLETION_CUSTOM_SOUND_DATA_URL]) settings.individualCompletionCustomSoundDataUrl = String(getStorageChangeValue(changes, STORAGE_KEYS.INDIVIDUAL_COMPLETION_CUSTOM_SOUND_DATA_URL, DEFAULT_SETTINGS.individualCompletionCustomSoundDataUrl) || '');
+  if (changes[STORAGE_KEYS.BATCH_COMPLETION_CUSTOM_SOUND_DATA_URL]) settings.batchCompletionCustomSoundDataUrl = String(getStorageChangeValue(changes, STORAGE_KEYS.BATCH_COMPLETION_CUSTOM_SOUND_DATA_URL, DEFAULT_SETTINGS.batchCompletionCustomSoundDataUrl) || '');
+  if (changes[STORAGE_KEYS.INDIVIDUAL_COMPLETION_CUSTOM_SOUND_NAME]) settings.individualCompletionCustomSoundName = String(getStorageChangeValue(changes, STORAGE_KEYS.INDIVIDUAL_COMPLETION_CUSTOM_SOUND_NAME, DEFAULT_SETTINGS.individualCompletionCustomSoundName) || '');
+  if (changes[STORAGE_KEYS.BATCH_COMPLETION_CUSTOM_SOUND_NAME]) settings.batchCompletionCustomSoundName = String(getStorageChangeValue(changes, STORAGE_KEYS.BATCH_COMPLETION_CUSTOM_SOUND_NAME, DEFAULT_SETTINGS.batchCompletionCustomSoundName) || '');
   // Gemini probe settings
-  if (changes[STORAGE_KEYS.GEMINI_PROBE_ENABLED]) settings.geminiProbeEnabled = !!changes[STORAGE_KEYS.GEMINI_PROBE_ENABLED].newValue;
-  if (changes[STORAGE_KEYS.GEMINI_PROBE_ONLY_IDLE]) settings.geminiProbeOnlyIdle = !!changes[STORAGE_KEYS.GEMINI_PROBE_ONLY_IDLE].newValue;
-  if (changes[STORAGE_KEYS.GEMINI_PROBE_PERIOD_MIN]) settings.geminiProbePeriodMin = clampNumber(changes[STORAGE_KEYS.GEMINI_PROBE_PERIOD_MIN].newValue, 1, 1, 60);
-  if (changes[STORAGE_KEYS.GEMINI_PROBE_IDLE_SEC]) settings.geminiProbeIdleSec = clampInt(changes[STORAGE_KEYS.GEMINI_PROBE_IDLE_SEC].newValue, 60, 15, 3600);
-  if (changes[STORAGE_KEYS.GEMINI_PROBE_MIN_ORANGE_SEC]) settings.geminiProbeMinOrangeSec = clampInt(changes[STORAGE_KEYS.GEMINI_PROBE_MIN_ORANGE_SEC].newValue, 12, 3, 600);
+  if (changes[STORAGE_KEYS.GEMINI_PROBE_ENABLED]) settings.geminiProbeEnabled = !!getStorageChangeValue(changes, STORAGE_KEYS.GEMINI_PROBE_ENABLED, DEFAULT_SETTINGS.geminiProbeEnabled);
+  if (changes[STORAGE_KEYS.GEMINI_PROBE_ONLY_IDLE]) settings.geminiProbeOnlyIdle = !!getStorageChangeValue(changes, STORAGE_KEYS.GEMINI_PROBE_ONLY_IDLE, DEFAULT_SETTINGS.geminiProbeOnlyIdle);
+  if (changes[STORAGE_KEYS.GEMINI_PROBE_PERIOD_MIN]) settings.geminiProbePeriodMin = clampNumber(getStorageChangeValue(changes, STORAGE_KEYS.GEMINI_PROBE_PERIOD_MIN, DEFAULT_SETTINGS.geminiProbePeriodMin), 1, 1, 60);
+  if (changes[STORAGE_KEYS.GEMINI_PROBE_IDLE_SEC]) settings.geminiProbeIdleSec = clampInt(getStorageChangeValue(changes, STORAGE_KEYS.GEMINI_PROBE_IDLE_SEC, DEFAULT_SETTINGS.geminiProbeIdleSec), 60, 15, 3600);
+  if (changes[STORAGE_KEYS.GEMINI_PROBE_MIN_ORANGE_SEC]) settings.geminiProbeMinOrangeSec = clampInt(getStorageChangeValue(changes, STORAGE_KEYS.GEMINI_PROBE_MIN_ORANGE_SEC, DEFAULT_SETTINGS.geminiProbeMinOrangeSec), 12, 3, 600);
   if (changes[STORAGE_KEYS.NOTIFICATION_SNOOZE_UNTIL]) {
-    settings.notificationSnoozeUntil = clampInt(changes[STORAGE_KEYS.NOTIFICATION_SNOOZE_UNTIL].newValue, 0, 0, Number.MAX_SAFE_INTEGER);
+    settings.notificationSnoozeUntil = clampInt(getStorageChangeValue(changes, STORAGE_KEYS.NOTIFICATION_SNOOZE_UNTIL, DEFAULT_SETTINGS.notificationSnoozeUntil), 0, 0, Number.MAX_SAFE_INTEGER);
     dashboardRelevantChanged = true;
+  }
+  if (changes[STORAGE_KEYS.CHATGPT_RATE_LIMIT_UNTIL]) {
+    chatGptNewChatRateLimitUntil = clampInt(getStorageChangeValue(changes, STORAGE_KEYS.CHATGPT_RATE_LIMIT_UNTIL, 0), 0, 0, Number.MAX_SAFE_INTEGER);
   }
   if (changes[STORAGE_KEYS.COMPLETION_HISTORY]) {
     completionHistoryCache = Array.isArray(changes[STORAGE_KEYS.COMPLETION_HISTORY].newValue) ? changes[STORAGE_KEYS.COMPLETION_HISTORY].newValue.slice(0, COMPLETION_HISTORY_LIMIT) : [];
     dashboardRelevantChanged = true;
   }
   if (changes[STORAGE_KEYS.QUIET_HOURS_ENABLED]) {
-    settings.quietHoursEnabled = !!changes[STORAGE_KEYS.QUIET_HOURS_ENABLED].newValue;
+    settings.quietHoursEnabled = !!getStorageChangeValue(changes, STORAGE_KEYS.QUIET_HOURS_ENABLED, DEFAULT_SETTINGS.quietHoursEnabled);
     dashboardRelevantChanged = true;
   }
   if (changes[STORAGE_KEYS.QUIET_HOURS_START]) {
-    settings.quietHoursStart = normalizeClockTime(changes[STORAGE_KEYS.QUIET_HOURS_START].newValue, '23:00');
+    settings.quietHoursStart = normalizeClockTime(getStorageChangeValue(changes, STORAGE_KEYS.QUIET_HOURS_START, DEFAULT_SETTINGS.quietHoursStart), '23:00');
     dashboardRelevantChanged = true;
   }
   if (changes[STORAGE_KEYS.QUIET_HOURS_END]) {
-    settings.quietHoursEnd = normalizeClockTime(changes[STORAGE_KEYS.QUIET_HOURS_END].newValue, '08:00');
+    settings.quietHoursEnd = normalizeClockTime(getStorageChangeValue(changes, STORAGE_KEYS.QUIET_HOURS_END, DEFAULT_SETTINGS.quietHoursEnd), '08:00');
     dashboardRelevantChanged = true;
   }
   // 관련 설정이 바뀌었으면 알람 갱신
@@ -1723,6 +1814,39 @@ async function tickGeminiProbe() {
   if (!pick?.tab?.id) return;
   await nudgeTabForGeminiCompletion(pick.tab.id, pick.tab.windowId);
 }
+function getQueuedSteeringTabIds() {
+  return Object.entries(tabStates)
+    .filter(([, state]) => Math.max(0, Number(state?.steeringQueueCount) || 0) > 0)
+    .map(([tabId]) => parseInt(tabId, 10))
+    .filter(Number.isFinite);
+}
+function ensureSteeringQueueProbeAlarm() {
+  const hasQueuedTabs = getQueuedSteeringTabIds().length > 0;
+  try {
+    if (!hasQueuedTabs) {
+      chrome.alarms.clear(STEERING_QUEUE_PROBE_ALARM);
+      return;
+    }
+    chrome.alarms.create(STEERING_QUEUE_PROBE_ALARM, { periodInMinutes: STEERING_QUEUE_PROBE_MIN_PERIOD_MIN });
+  } catch (_) {}
+}
+async function tickSteeringQueueProbe() {
+  const queuedTabIds = getQueuedSteeringTabIds();
+  if (!queuedTabIds.length) {
+    ensureSteeringQueueProbeAlarm();
+    return;
+  }
+  const tabs = await pTabsQuery({});
+  const tabsById = new Map((tabs || []).filter((tab) => typeof tab?.id === 'number').map((tab) => [tab.id, tab]));
+  for (const tabId of queuedTabIds) {
+    const tab = tabsById.get(tabId);
+    if (!tab || !isMonitoredUrl(tab.url || '')) continue;
+    await ensureContentScripts(tab);
+    await pTabsSendMessage(tabId, { action: 'force_check', reason: 'steering_queue_probe', topFrameOnly: true }, { frameId: 0 });
+    await pTabsSendMessage(tabId, { action: 'process_steering_queue_now', reason: 'steering_queue_probe', topFrameOnly: true }, { frameId: 0 });
+  }
+  ensureSteeringQueueProbeAlarm();
+}
 async function nudgeTabForGeminiCompletion(targetTabId, windowId) {
   // 안전장치: 현재 tabStates가 ORANGE가 아니면 굳이 안 건드린다.
   const st = tabStates[targetTabId];
@@ -1750,8 +1874,14 @@ async function nudgeTabForGeminiCompletion(targetTabId, windowId) {
 }
 try {
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (!alarm || alarm.name !== GEMINI_PROBE_ALARM) return;
-    safeActionCall(tickGeminiProbe());
+    if (!alarm) return;
+    if (alarm.name === GEMINI_PROBE_ALARM) {
+      safeActionCall(tickGeminiProbe());
+      return;
+    }
+    if (alarm.name === STEERING_QUEUE_PROBE_ALARM) {
+      safeActionCall(tickSteeringQueueProbe());
+    }
   });
 } catch (_) {}
 function getOrangeTabCount() {
@@ -1813,6 +1943,8 @@ function createBasicNotification(notificationId, title, message) {
       title,
       message,
       priority: 2,
+    }, () => {
+      if (chrome.runtime.lastError) delete notificationTargets[notificationId];
     });
   } catch (_) {}
 }
@@ -1859,16 +1991,21 @@ async function emitBatchCompletionAlert({ peakOrangeCount }) {
   }
 }
 function updateIcon(tabId) {
-  // Chrome 툴바/확장프로그램 메인 아이콘은 흰색 AI 아이콘 하나만 쓴다.
+  // Chrome 툴바/확장프로그램 메인 아이콘은 고정하고, 후속 지시 대기열 수만 badge로 표시한다.
   const iconPath = 'assets/bell_profile.png';
+  const queueCount = Math.max(0, Number(tabStates?.[tabId]?.steeringQueueCount) || 0);
+  const badgeText = queueCount > 0 ? (queueCount > 99 ? '99+' : String(queueCount)) : '';
   const signature = JSON.stringify({
     iconPath,
-    badgeText: '',
+    badgeText,
   });
   if (actionStateCache[tabId] === signature) return;
   actionStateCache[tabId] = signature;
   safeActionCall(chrome.action.setIcon({ path: iconPath, tabId: tabId }));
-  safeActionCall(chrome.action.setBadgeText({ text: '', tabId: tabId }));
+  safeActionCall(chrome.action.setBadgeText({ text: badgeText, tabId: tabId }));
+  if (badgeText) {
+    safeActionCall(chrome.action.setBadgeBackgroundColor({ color: '#0f766e', tabId: tabId }));
+  }
 }
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.action === 'test_alert_sound') {
@@ -1891,6 +2028,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'get_custom_tab_titles_map',
     'batch_set_custom_tab_titles_for_tabs',
     'batch_clear_custom_tab_titles_for_tabs',
+    'reset_runtime_caches_for_storage_replace',
   ]);
   if (!popupScopedActions.has(message?.action)) return;
   const tabId = clampInt(message?.tabId, NaN, 0, Number.MAX_SAFE_INTEGER);
@@ -1906,6 +2044,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'batch_clear_custom_tab_titles_for_tabs') {
     const result = clearCustomTabTitlesForTabs(message.tabIds);
     sendResponse({ ok: true, count: result.count, total: result.total, cleared: result.cleared });
+    return;
+  }
+  if (message.action === 'reset_runtime_caches_for_storage_replace') {
+    resetRuntimeCachesForStorageReplace();
+    sendResponse({ ok: true });
     return;
   }
   if (!Number.isFinite(tabId) || tabId <= 0) {
@@ -1947,6 +2090,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'get_tab_url') {
     sendResponse({ url: sender.tab?.url || '' });
     return;
+  }
+  if (message.action === 'ensure_title_guard') {
+    ensureMainWorldTitleGuard(tabId)
+      .then((ok) => sendResponse({ ok: !!ok }))
+      .catch(() => sendResponse({ ok: false }));
+    return true;
   }
   if (message.action === 'get_custom_tab_title') {
     sendResponse({ ok: true, title: getCustomTabTitleForTab(tabId) });
@@ -2121,6 +2270,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     };
     if (meaningfulChanged) bumpDashboardVersion();
     updateIcon(tabId);
+    ensureSteeringQueueProbeAlarm();
     return;
   }
   // content 쪽 사용자 상호작용(클릭/스크롤)로 ⚪ -> 🟢
@@ -2179,12 +2329,22 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if ('title' in changeInfo || 'url' in changeInfo || 'discarded' in changeInfo || 'status' in changeInfo) {
     bumpDashboardVersion();
   }
-  if (changeInfo.status === 'complete' || changeInfo.url) {
-    const candidate = { ...prevMeta, ...(tab || {}), id: tabId, url: tab?.url || changeInfo.url || prevMeta.url || '' };
+  const nextUrl = tab?.url || changeInfo.url || prevMeta.url || '';
+  const titleChangedWithoutBadge = Object.prototype.hasOwnProperty.call(changeInfo, 'title')
+    && isMonitoredUrl(nextUrl)
+    && !titleHasReadyAiPrefix(changeInfo.title || tab?.title || '');
+  if (changeInfo.status === 'complete' || changeInfo.url || titleChangedWithoutBadge) {
+    const candidate = { ...prevMeta, ...(tab || {}), id: tabId, url: nextUrl };
     if (isMonitoredUrl(candidate.url || '')) {
       safeActionCall((async () => {
         const ready = await ensureContentScripts(candidate);
-        if (ready) await pTabsSendMessage(tabId, { action: 'force_check', reason: changeInfo.status === 'complete' ? 'tab_complete' : 'tab_url' });
+        if (!ready) return;
+        if (titleChangedWithoutBadge) {
+          if (!isChatGptUrl(candidate.url || '')) await ensureMainWorldTitleGuard(tabId);
+          await pTabsSendMessage(tabId, { action: 'force_title_sync', reason: 'tab_title' }, { frameId: 0 });
+          return;
+        }
+        await pTabsSendMessage(tabId, { action: 'force_check', reason: changeInfo.status === 'complete' ? 'tab_complete' : 'tab_url' });
       })());
     }
   }
@@ -2239,6 +2399,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   delete frameStates[tabId];
   if (hadTrackedState) bumpDashboardVersion();
   if (wasOrange) handleOrangeWaveChange(prevOrangeCount, getOrangeTabCount(), { cancelWave: true });
+  if (hadTrackedState) ensureSteeringQueueProbeAlarm();
 });
 function isMonitoredUrl(url) {
   if (!url || !(url.startsWith('http://') || url.startsWith('https://'))) return false;
@@ -2271,6 +2432,7 @@ function purgeDisabledTabs() {
     }
     if (removedAny) bumpDashboardVersion();
     if (removedOrange) handleOrangeWaveChange(prevOrangeCount, getOrangeTabCount(), { cancelWave: true });
+    if (removedAny) ensureSteeringQueueProbeAlarm();
   });
 }
 async function kickAllTabs(reason) {

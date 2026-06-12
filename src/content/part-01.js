@@ -22,7 +22,12 @@ var TITLE_BADGE = {
   ORANGE: '🟠', // 생성중
   GREEN: '⚪',  // 완료(아직 클릭/스크롤로 확인 전)
 };
-var TITLE_BADGE_PREFIX_RE = /^(?:[⚪🟠🟢](?:\[?\d+\+?\]?|\s*(?:\d+\+?)?)?\s*)+/;
+var TITLE_BADGE_PREFIX_RE = /^(?:[⚪🔵🟠🟢](?:\[?\d+\+?\]?|\s*(?:\d+\+?)?)?\s*)+/;
+function getTitleBadgeStateKey() {
+  if (isGenerating) return 'ORANGE';
+  if (completionStatus === 'completed') return 'GREEN';
+  return 'WHITE';
+}
 function getTitleBadgeCountGlyph() {
   if (!titleBadgeCountEnabled) return '';
   if (!steeringQueue.length) return '';
@@ -36,22 +41,59 @@ var _lastHeartbeatAt = 0;
 // - Gemini는 DOM 변경이 childList가 아니라 attributes/style로만 일어나는 경우가 있어
 //   MutationObserver(childList)만으로는 "중지 버튼 사라짐"을 못 잡고 🟠가 유지될 수 있음.
 // - 따라서 attributes 감시 + 주기 폴링(setInterval)을 같이 사용한다.
-var CHECK_INTERVAL_ACTIVE_MS = 1200;
-var CHECK_INTERVAL_VISIBLE_IDLE_MS = 1800;
-var CHECK_INTERVAL_HIDDEN_ACTIVE_MS = 2000;
-var CHECK_INTERVAL_HIDDEN_IDLE_MS = 5500;
-var MIN_CHECK_GAP_MS = 250;
+var CHECK_INTERVAL_ACTIVE_MS = 450;
+var CHECK_INTERVAL_VISIBLE_IDLE_MS = 1200;
+var CHECK_INTERVAL_HIDDEN_ACTIVE_MS = 1400;
+var CHECK_INTERVAL_HIDDEN_IDLE_MS = 6000;
+var MIN_CHECK_GAP_ACTIVE_MS = 300;
+var MIN_CHECK_GAP_IDLE_MS = 420;
+var MIN_CHECK_GAP_HIDDEN_ACTIVE_MS = 900;
+var MIN_CHECK_GAP_HIDDEN_IDLE_MS = 1200;
 var _checkScheduled = false;
+var _checkTimer = null;
 var _lastCheckAt = 0;
 var _currentPollingMs = 0;
-function scheduleCheck() {
+var _statusQueryCache = null;
+function isChatGptSafeMode() {
+  try {
+    const siteKey = getSiteKey?.();
+    if (siteKey === 'chatgpt') return true;
+  } catch (_) {}
+  try {
+    const host = String(location.hostname || '').toLowerCase();
+    return host === 'chatgpt.com' || host.endsWith('.chatgpt.com') || host === 'chat.openai.com';
+  } catch (_) {
+    return false;
+  }
+}
+function isFastStatusCheckWindow() {
+  return !!(
+    isGenerating
+    || (typeof steeringAwaitingResponseStart !== 'undefined' && steeringAwaitingResponseStart)
+    || (typeof steeringAwaitingTurnCompletion !== 'undefined' && steeringAwaitingTurnCompletion)
+    || (typeof steeringProcessing !== 'undefined' && steeringProcessing)
+  );
+}
+function getMinStatusCheckGapMs() {
+  const active = isFastStatusCheckWindow();
+  if (document.hidden) return active ? MIN_CHECK_GAP_HIDDEN_ACTIVE_MS : MIN_CHECK_GAP_HIDDEN_IDLE_MS;
+  if (active && getSiteKey() === 'chatgpt') return 900;
+  return active ? MIN_CHECK_GAP_ACTIVE_MS : MIN_CHECK_GAP_IDLE_MS;
+}
+function scheduleCheck(force = false) {
   if (!monitoring) return;
-  if (_checkScheduled) return;
+  if (_checkScheduled) {
+    if (!force) return;
+    try { clearTimeout(_checkTimer); } catch (_) {}
+    _checkScheduled = false;
+    _checkTimer = null;
+  }
   _checkScheduled = true;
   const now = Date.now();
-  const delay = Math.max(0, MIN_CHECK_GAP_MS - (now - _lastCheckAt));
-  setTimeout(() => {
+  const delay = force ? 0 : Math.max(0, getMinStatusCheckGapMs() - (now - _lastCheckAt));
+  _checkTimer = setTimeout(() => {
     _checkScheduled = false;
+    _checkTimer = null;
     _lastCheckAt = Date.now();
     try {
       checkStatus();
@@ -64,8 +106,9 @@ function scheduleCheck() {
 }
 function getDesiredPollingMs() {
   if (!monitoring) return 0;
-  if (document.hidden) return isGenerating ? CHECK_INTERVAL_HIDDEN_ACTIVE_MS : CHECK_INTERVAL_HIDDEN_IDLE_MS;
-  if (isGenerating) return CHECK_INTERVAL_ACTIVE_MS;
+  const active = isFastStatusCheckWindow();
+  if (document.hidden) return active ? CHECK_INTERVAL_HIDDEN_ACTIVE_MS : CHECK_INTERVAL_HIDDEN_IDLE_MS;
+  if (active) return CHECK_INTERVAL_ACTIVE_MS;
   return CHECK_INTERVAL_VISIBLE_IDLE_MS;
 }
 function ensurePolling(force = false) {
@@ -94,23 +137,30 @@ function isVisible(elem) {
   if (!elem) return false;
   // hidden 속성
   if (elem.hasAttribute && elem.hasAttribute('hidden')) return false;
+  let hasBox = false;
+  try {
+    hasBox = !!(elem.offsetWidth || elem.offsetHeight || elem.getClientRects().length);
+  } catch (_) {
+    hasBox = false;
+  }
+  if (!hasBox) return false;
   // computed style 기반
   let style;
   try {
     style = window.getComputedStyle(elem);
   } catch (_) {
     // getComputedStyle이 실패하면 최소한의 DOM 기반 판정만 수행
-    return !!(elem.offsetWidth || elem.offsetHeight || elem.getClientRects().length);
+    return hasBox;
   }
   if (!style) return false;
   if (style.display === 'none') return false;
   if (style.visibility === 'hidden' || style.visibility === 'collapse') return false;
   if (parseFloat(style.opacity || '1') === 0) return false;
-  // 레이아웃/렌더 사각형
-  const rect = elem.getBoundingClientRect ? elem.getBoundingClientRect() : null;
-  if (rect && (rect.width <= 0 || rect.height <= 0)) return false;
+  let readyAiRect = null;
+  try { readyAiRect = elem.getBoundingClientRect ? elem.getBoundingClientRect() : null; } catch (_) {}
+  if (readyAiRect && (readyAiRect.width <= 0 || readyAiRect.height <= 0)) return false;
   // 마지막 안전장치
-  return !!(elem.offsetWidth || elem.offsetHeight || elem.getClientRects().length);
+  return hasBox;
 }
 function isEnabledButtonLike(elem) {
   if (!elem) return false;
@@ -263,16 +313,28 @@ function resetDeepRoots() {
 // selector를 document + (open) shadow roots까지 포함해서 찾는다.
 // (monitoring 시작 시 initDeepRoots()가 호출되어야 의미가 있다)
 function qsa(selector) {
+  if (_statusQueryCache?.has(selector)) return _statusQueryCache.get(selector);
+  let result = [];
   // deep roots가 활성화되어 있으면(오픈 shadowRoot 포함) 우선 사용
   try {
     const deep = deepQuerySelectorAll(selector);
-    if (deep && deep.length) return deep;
+    if (deep && deep.length) result = deep;
   } catch (_) {}
-  try {
-    return Array.from(document.querySelectorAll(selector));
-  } catch (_) {
-    return [];
+  if (!result.length) {
+    try {
+      result = Array.from(document.querySelectorAll(selector));
+    } catch (_) {
+      result = [];
+    }
   }
+  if (_statusQueryCache) _statusQueryCache.set(selector, result);
+  return result;
+}
+function beginStatusQueryCache() {
+  _statusQueryCache = new Map();
+}
+function endStatusQueryCache() {
+  _statusQueryCache = null;
 }
 function normalizeIconName(s) {
   return String(s || '')
@@ -311,9 +373,8 @@ function computeDesiredDocumentTitle(currentRawTitle = document.title) {
   }
   const baseTitle = getDesiredBaseTitle(cleanTitle);
   if (!titleBadgeEnabled) return baseTitle;
-  let badge = TITLE_BADGE.WHITE;
-  if (isGenerating) badge = TITLE_BADGE.ORANGE;
-  else if (completionStatus === 'completed') badge = TITLE_BADGE.GREEN;
+  const badge = TITLE_BADGE[getTitleBadgeStateKey()] || TITLE_BADGE.WHITE;
   const countGlyph = getTitleBadgeCountGlyph();
-  return `${badge}${countGlyph} ${baseTitle}`.trim();
+  const prefix = `${badge}${countGlyph}`.trim();
+  return prefix ? `${prefix} ${baseTitle}`.trim() : baseTitle;
 }

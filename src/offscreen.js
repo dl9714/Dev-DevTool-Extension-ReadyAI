@@ -109,7 +109,7 @@ async function playCustomAudio(dataUrl, volume) {
   }
   const ended = await Promise.race([
     waitForAudioOnce(el, 'ended', MAX_CUSTOM_AUDIO_DURATION_SEC * 1000),
-    waitForAudioOnce(el, 'error', 4000).then(() => false),
+    waitForAudioOnce(el, 'error', (MAX_CUSTOM_AUDIO_DURATION_SEC * 1000) + 500).then(() => false),
   ]);
   try {
     el.pause();

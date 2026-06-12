@@ -38,43 +38,53 @@ function applySteeringUiNow() {
   }
   const refs = ensureSteeringUi();
   if (!refs) return;
-  refs.title.textContent = getSteeringStateLabel();
-  refs.meta.textContent = getSteeringQueueCountLabel();
-  if (refs.tabTitleBadge) refs.tabTitleBadge.textContent = getCurrentTitleBadgeGlyph();
-  if (refs.launcherCount) {
-    refs.launcherCount.textContent = getSteeringQueueCountLabel();
-    refs.launcherCount.style.display = steeringQueueCountVisible ? 'inline-flex' : 'none';
+  const queueCountLabel = getSteeringQueueCountLabel();
+  setSteeringTextIfChanged(refs.title, getSteeringStateLabel());
+  setSteeringTextIfChanged(refs.meta, queueCountLabel);
+  if (refs.tabTitleBadge) {
+    setSteeringTextIfChanged(refs.tabTitleBadge, getCurrentTitleBadgeGlyph());
+    setSteeringDatasetIfChanged(refs.tabTitleBadge, 'state', getCurrentTitleBadgeState());
   }
-  refs.launcherTitle.textContent = getSteeringLauncherText();
-  refs.launcherSub.textContent = getSteeringLauncherSubText();
+  if (refs.launcherCount) {
+    setSteeringTextIfChanged(refs.launcherCount, queueCountLabel);
+    setSteeringDisplayIfChanged(refs.launcherCount, steeringQueueCountVisible ? 'inline-flex' : 'none');
+  }
+  setSteeringTextIfChanged(refs.launcherTitle, getSteeringLauncherText());
+  setSteeringTextIfChanged(refs.launcherSub, getSteeringLauncherSubText());
   if (refs.tabTitleMeta) refs.tabTitleMeta.textContent = hasCustomTabTitle() ? `크롬 탭 이름변경: ${normalizeCustomTabTitle(customTabTitle)} · 원래 제목: ${normalizeCustomTabTitle(nativePageTitle || activeSite?.name || 'AI')}` : `크롬 탭 이름 자동 · 원래 제목: ${normalizeCustomTabTitle(nativePageTitle || activeSite?.name || 'AI')}`;
   const titleInputActive = steeringRoot?.activeElement === refs.tabTitleInput;
   if (refs.tabTitleInput && (!titleInputActive || !String(refs.tabTitleInput.value || '').trim())) {
-    refs.tabTitleInput.value = normalizeCustomTabTitle(customTabTitle);
+    setSteeringValueIfChanged(refs.tabTitleInput, normalizeCustomTabTitle(customTabTitle));
   }
   restoreSteeringDraftToInput();
-  if (refs.tabTitleSave) refs.tabTitleSave.disabled = !IS_TOP_FRAME;
-  if (refs.tabTitleClear) refs.tabTitleClear.disabled = !IS_TOP_FRAME || !hasCustomTabTitle();
-  if (refs.card) refs.card.dataset.advanced = steeringAdvancedEnabled ? 'true' : 'false';
-  if (refs.advancedCard) refs.advancedCard.classList.toggle('enabled', !!steeringAdvancedEnabled);
-  if (refs.advancedToggle) refs.advancedToggle.checked = !!steeringAdvancedEnabled;
-  if (refs.advancedBody) refs.advancedBody.style.display = steeringAdvancedEnabled ? 'flex' : 'none';
+  setSteeringDisabledIfChanged(refs.tabTitleSave, !IS_TOP_FRAME);
+  setSteeringDisabledIfChanged(refs.tabTitleClear, !IS_TOP_FRAME || !hasCustomTabTitle());
+  setSteeringDatasetIfChanged(refs.card, 'advanced', steeringAdvancedEnabled ? 'true' : 'false');
+  setSteeringClassToggleIfChanged(refs.advancedCard, 'enabled', steeringAdvancedEnabled);
+  setSteeringCheckedIfChanged(refs.advancedToggle, steeringAdvancedEnabled);
+  setSteeringDisplayIfChanged(refs.advancedBody, steeringAdvancedEnabled ? 'flex' : 'none');
   const newChatCountActive = steeringRoot?.activeElement === refs.newChatCount;
   if (refs.newChatCount && !newChatCountActive && refs.newChatCount.value !== String(steeringNewChatTabCount)) {
     refs.newChatCount.value = String(steeringNewChatTabCount);
   }
-  refs.primary.textContent = getSteeringPrimaryLabel();
-  refs.primary.disabled = false;
+  setSteeringTextIfChanged(refs.primary, getSteeringPrimaryLabel());
+  setSteeringDisabledIfChanged(refs.primary, false);
   const hasDraftText = !!String(refs.input?.value || '').trim();
   const hasDraftImages = getSteeringDraftAttachmentCount() > 0;
-  if (refs.newChatSend) refs.newChatSend.disabled = steeringNewChatSendPending || !steeringAdvancedEnabled || !hasDraftText || hasDraftImages;
-  if (refs.sendNow) refs.sendNow.disabled = !steeringQueue.length && !hasDraftText && !hasDraftImages;
-  if (refs.clear) refs.clear.disabled = !steeringQueue.length && !hasDraftText && !hasDraftImages;
-  if (refs.runNext) refs.runNext.disabled = !steeringQueue.length;
-  if (refs.clearQueue) refs.clearQueue.disabled = !steeringQueue.length;
-  if (refs.launcherRow) refs.launcherRow.style.display = steeringLauncherVisible ? 'inline-flex' : 'none';
-  refs.launcher.style.display = steeringLauncherVisible ? 'inline-flex' : 'none';
-  refs.card.style.display = steeringPanelOpen ? 'block' : 'none';
+  setSteeringDisabledIfChanged(refs.newChatSend, steeringNewChatSendPending || !steeringAdvancedEnabled || !hasDraftText || hasDraftImages);
+  setSteeringDisabledIfChanged(refs.sendNow, !steeringQueue.length && !hasDraftText && !hasDraftImages);
+  setSteeringDisabledIfChanged(refs.clear, !steeringQueue.length && !hasDraftText && !hasDraftImages);
+  if (refs.resumeNow) {
+    setSteeringTextIfChanged(refs.resumeNow, '즉시 재개');
+    setSteeringDisabledIfChanged(refs.resumeNow, !steeringQueue.length);
+    setSteeringDisplayIfChanged(refs.resumeNow, isSteeringQueueBlocked() ? 'inline-flex' : 'none');
+  }
+  if (refs.runNext) setSteeringTextIfChanged(refs.runNext, getSteeringResumeLabel());
+  setSteeringDisabledIfChanged(refs.runNext, !steeringQueue.length);
+  setSteeringDisabledIfChanged(refs.clearQueue, !steeringQueue.length);
+  setSteeringDisplayIfChanged(refs.launcherRow, steeringLauncherVisible ? 'inline-flex' : 'none');
+  setSteeringDisplayIfChanged(refs.launcher, steeringLauncherVisible ? 'inline-flex' : 'none');
+  setSteeringDisplayIfChanged(refs.card, steeringPanelOpen ? 'block' : 'none');
   applySteeringTheme();
   positionSteeringUi();
   renderSteeringQueue();
@@ -82,8 +92,8 @@ function applySteeringUiNow() {
   renderSteeringAttachments();
   syncSteeringAttachmentPreview();
   syncSteeringQueueCount();
-  updateTitleBadge();
-  steeringHost.style.display = (steeringPanelOpen || steeringLauncherVisible) ? 'block' : 'none';
+  syncTitleBadgeFromUiRender(false);
+  setSteeringDisplayIfChanged(steeringHost, (steeringPanelOpen || steeringLauncherVisible) ? 'block' : 'none');
 }
 function updateSteeringUi() {
   if (steeringUiRafId) return;
@@ -99,6 +109,10 @@ function updateSteeringUi() {
 // Generating detection rules
 // =========================
 var CHATGPT_IMAGE_GENERATING_RE = /(\b(?:creating|generating|making|rendering|drawing)\s+(?:an?\s+)?images?\b|\bimages?\s+(?:is|are|being)?\s*(?:created|generated|rendered)\b|이미지(?:를|가)?\s*(?:생성|만들|그리)(?:하는|하고\s*있는|고\s*있는|는)?\s*중|이미지\s*생성\s*중)/i;
+var CHATGPT_STOP_SELECTOR = '[data-testid="stop-button"],button[aria-label*="Stop"],button[aria-label*="stop"],button[aria-label*="\uC911\uC9C0"],button[data-testid*="stop"]';
+var CHATGPT_IMAGE_STATUS_SELECTOR = '[role="status"],[aria-live],[aria-busy="true"],[data-testid*="image-generation"],[data-testid*="image_generation"],[data-testid*="generating-image"],[data-testid*="image-gen"],[data-testid*="progress"],[data-testid*="loading"]';
+var CHATGPT_TURN_SELECTOR = '[data-message-author-role="assistant"],[data-testid^="conversation-turn-"],article[data-testid*="conversation-turn"]';
+var CHATGPT_PROGRESS_SELECTOR = '[role="progressbar"],[aria-busy="true"],[data-testid*="progress"],[data-testid*="loading"],.animate-spin,.animate-pulse,[class*="shimmer"],[class*="skeleton"]';
 function getElementSignalText(el) {
   if (!el) return '';
   const attrs = [
@@ -108,7 +122,7 @@ function getElementSignalText(el) {
     el.getAttribute?.('role'),
     el.getAttribute?.('class'),
   ];
-  return `${attrs.filter(Boolean).join(' ')} ${el.innerText || el.textContent || ''}`.replace(/\s+/g, ' ').trim();
+  return `${attrs.filter(Boolean).join(' ')} ${el.textContent || ''}`.replace(/\s+/g, ' ').trim();
 }
 function hasChatGptImageGenerationSignal(el) {
   const signal = getElementSignalText(el);
@@ -117,36 +131,19 @@ function hasChatGptImageGenerationSignal(el) {
 }
 function hasChatGptProgressIndicator(el) {
   if (!el) return false;
-  const selectors = [
-    '[role="progressbar"]',
-    '[aria-busy="true"]',
-    '[data-testid*="progress"]',
-    '[data-testid*="loading"]',
-    '.animate-spin',
-    '.animate-pulse',
-    '[class*="shimmer"]',
-    '[class*="skeleton"]',
-  ];
-  for (const selector of selectors) {
-    const candidates = el.matches?.(selector) ? [el] : Array.from(el.querySelectorAll?.(selector) || []);
-    if (candidates.some((candidate) => isVisible(candidate))) return true;
-  }
-  return false;
+  const candidates = el.matches?.(CHATGPT_PROGRESS_SELECTOR) ? [el] : Array.from(el.querySelectorAll?.(CHATGPT_PROGRESS_SELECTOR) || []);
+  return candidates.some((candidate) => isVisible(candidate));
 }
 function getVisibleChatGptTurnCandidates() {
-  const selectors = [
-    '[data-message-author-role="assistant"]',
-    '[data-testid^="conversation-turn-"]',
-    'article[data-testid*="conversation-turn"]',
-  ];
-  const seen = new Set();
+  const maxRecentTurns = 16;
   const out = [];
-  for (const selector of selectors) {
-    for (const el of qsa(selector)) {
-      if (!el || seen.has(el) || !isVisible(el)) continue;
-      seen.add(el);
-      out.push(el);
-    }
+  const candidates = qsa(CHATGPT_TURN_SELECTOR);
+  const start = Math.max(0, candidates.length - maxRecentTurns);
+  for (let i = start; i < candidates.length; i++) {
+    const el = candidates[i];
+    if (!el || !isVisible(el)) continue;
+    out.push(el);
+    if (out.length >= maxRecentTurns) return out;
   }
   return out;
 }
@@ -159,22 +156,12 @@ function isLikelyUserChatGptTurn(el) {
   return hasUser && !hasAssistant;
 }
 function detectChatGPTImageGenerating() {
-  const statusSelectors = [
-    '[role="status"]',
-    '[aria-live]',
-    '[aria-busy="true"]',
-    '[data-testid*="image-generation"]',
-    '[data-testid*="image_generation"]',
-    '[data-testid*="generating-image"]',
-    '[data-testid*="image-gen"]',
-    '[data-testid*="progress"]',
-    '[data-testid*="loading"]',
-  ];
-  for (const selector of statusSelectors) {
-    for (const el of qsa(selector)) {
-      if (!isVisible(el)) continue;
-      if (hasChatGptImageGenerationSignal(el)) return true;
-    }
+  const statusCandidates = qsa(CHATGPT_IMAGE_STATUS_SELECTOR);
+  const statusStart = Math.max(0, statusCandidates.length - 24);
+  for (let i = statusStart; i < statusCandidates.length; i++) {
+    const el = statusCandidates[i];
+    if (!isVisible(el)) continue;
+    if (hasChatGptImageGenerationSignal(el)) return true;
   }
   const turns = getVisibleChatGptTurnCandidates();
   for (let i = turns.length - 1; i >= 0; i--) {
@@ -186,18 +173,8 @@ function detectChatGPTImageGenerating() {
   return false;
 }
 function detectChatGPTGenerating() {
-  const selectors = [
-    '[data-testid="stop-button"]',
-    'button[aria-label*="Stop"]',
-    'button[aria-label*="중지"]',
-    'button[data-testid*="stop"]',
-  ];
-  for (const sel of selectors) {
-    const btns = qsa(sel);
-    if (btns.some((btn) => isVisible(btn) && isEnabledButtonLike(btn))) return true;
-  }
-  if (detectChatGPTImageGenerating()) return true;
-  return false;
+  const mergedBtns = qsa(CHATGPT_STOP_SELECTOR);
+  return mergedBtns.some((btn) => isVisible(btn) && isEnabledButtonLike(btn));
 }
 function detectGeminiGenerating() {
   // Gemini: "중지" 또는 "Stop" 단어가 들어간 버튼이 화면에 보이는지 확인
@@ -307,7 +284,7 @@ function detectAiStudioGenerating() {
 function detectClaudeGenerating() {
   // Claude: 버튼 텍스트에 "Stop"이 포함되어 있는지 확인
   const buttons = Array.from(document.querySelectorAll('button, div[role="button"]'));
-  return buttons.some((btn) => btn.innerText.includes('Stop') && isVisible(btn));
+  return buttons.some((btn) => String(btn.textContent || '').includes('Stop') && isVisible(btn));
 }
 function detectGenericStopGenerating() {
   // 범용: Stop/중지/Cancel/취소/Abort 텍스트 or aria-label 기반
@@ -317,7 +294,7 @@ function detectGenericStopGenerating() {
   for (const el of candidates) {
     if (!isVisible(el)) continue;
     const aria = (el.getAttribute('aria-label') || '').trim();
-    const txt = (el.innerText || '').trim();
+    const txt = (el.textContent || '').trim();
     const hay = `${aria} ${txt}`.trim();
     if (!hay) continue;
     if (STOP_RE.test(hay)) return true;
@@ -336,6 +313,7 @@ function checkStatus() {
   if (!monitoring || !activeSite) return;
   const platform = activeSite.key;
   let currentlyGenerating = false;
+  beginStatusQueryCache();
   try {
     // web component/shadow root 구조가 동적으로 바뀌는 사이트(AI Studio 등) 보강
     // open shadowRoot가 동적으로 생기는 사이트(특히 Gemini) 대비
@@ -343,11 +321,15 @@ function checkStatus() {
     currentlyGenerating = detectGenerating(activeSite);
   } catch (_) {
     currentlyGenerating = false;
+  } finally {
+    endStatusQueryCache();
   }
   // 상태가 변했을 때만 처리 + heartbeat(프레임 합산용)
   let shouldSend = false;
+  let visualChanged = false;
   if (isGenerating !== currentlyGenerating) {
     isGenerating = currentlyGenerating;
+    visualChanged = true;
     // 요구사항:
     // - 생성 시작: 🟢 -> 🟠
     // - 생성 완료: 🟠 -> ⚪ (탭이 포커스인지 여부와 무관하게 무조건 ⚪)
@@ -358,7 +340,7 @@ function checkStatus() {
       clearSteeringAutoSendTimer();
       clearSteeringSendLock();
       clearSteeringAwaitingResponseStart();
-      if (steeringAwaitingTurnCompletion) steeringObservedGenerationSinceSend = true;
+      markSteeringGenerationObserved();
     } else {
       completionStatus = 'completed';
       steeringLastCompletionAt = Date.now();
@@ -371,11 +353,13 @@ function checkStatus() {
         scheduleSteeringQueueProcessing(STEERING_AUTO_SEND_DELAY_MS);
       }
     }
+    armTitleBadgeStabilityWindow(isGenerating ? 1800 : 4000);
     shouldSend = true;
     ensurePolling(true);
   } else if (!hasSentInitialState) {
     // 초기 1회는 무조건 상태 전송(연두색 뱃지 표시용)
     shouldSend = true;
+    visualChanged = true;
   } else {
     // frame TTL이 남지 않도록 주기적으로 status를 보내준다(오탐 방지: 5초에 1번)
     const now = Date.now();
@@ -393,9 +377,12 @@ function checkStatus() {
     hasSentInitialState = true;
     _lastHeartbeatAt = Date.now();
   }
-  // 루프마다 배지 상태 강제 동기화 (사이트가 제목을 바꿔도 다시 덮어씀)
-  updateTitleBadge();
-  updateSteeringUi();
+  if (visualChanged) {
+    updateTitleBadge();
+    updateSteeringUi();
+  } else {
+    syncTitleBadgeFromStatusLoop(false);
+  }
 }
 function isEditableInteractionTarget(target) {
   if (!target) return false;
@@ -408,6 +395,7 @@ function isEditableInteractionTarget(target) {
   return false;
 }
 function markTypingAcknowledged(event) {
+  if (completionStatus !== 'completed' || isGenerating) return;
   if (isSteeringTarget(event?.target)) return;
   if (isComposerAcknowledgeSuppressed()) return;
   if (!isEditableInteractionTarget(event?.target)) return;
