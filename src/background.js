@@ -1887,14 +1887,12 @@ async function tickSteeringQueueProbe() {
     return;
   }
   try {
-    const tabs = await pTabsQuery({});
-    const tabsById = new Map((tabs || []).filter((tab) => typeof tab?.id === 'number').map((tab) => [tab.id, tab]));
     const start = Math.max(0, steeringQueueProbeCursor % queuedTabIds.length);
     const rotated = queuedTabIds.slice(start).concat(queuedTabIds.slice(0, start));
     const picked = rotated.slice(0, STEERING_QUEUE_PROBE_MAX_TABS_PER_TICK);
     steeringQueueProbeCursor = (start + picked.length) % queuedTabIds.length;
     for (const tabId of picked) {
-      const tab = tabsById.get(tabId);
+      const tab = await pTabsGet(tabId);
       if (!tab || !isChatGptUrl(tab.url || '')) continue;
       await ensureContentScripts(tab, { allFrames: false, topFrameOnly: true, frameId: 0 });
       await pTabsSendMessage(tabId, { action: 'force_check', reason: 'steering_queue_probe', topFrameOnly: true }, { frameId: 0 });

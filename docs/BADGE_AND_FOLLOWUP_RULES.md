@@ -56,7 +56,7 @@
 2. ChatGPT iframe은 후속 지시 대기열 개수를 background에 보고하면 안 된다. iframe의 빈 큐가 top frame의 실제 대기열 개수를 0으로 덮어쓰면 안 된다.
 3. background의 후속 지시 probe는 ChatGPT URL이면서 실제 대기열 개수가 남아 있는 탭만 대상으로 한다.
 4. 큐가 없는 평상시에는 후속 지시 probe alarm을 꺼두어야 한다.
-5. 여러 ChatGPT 탭이 열려 있어도 probe는 한 번에 소수 탭만 순환 처리해야 한다. 모든 Chrome 탭이나 모든 iframe을 동시에 깨우는 방식으로 되돌리면 안 된다.
+5. 여러 ChatGPT 탭이 열려 있어도 probe는 큐가 있는 탭 ID 중 한 번에 소수 탭만 순환 처리해야 한다. 모든 Chrome 탭이나 모든 iframe을 동시에 깨우는 방식으로 되돌리면 안 된다.
 6. 새 채팅 분산 전송처럼 명시적으로 필요한 경우를 제외하고 ChatGPT content script를 all frames로 강제 재주입하면 안 된다.
 7. `manifest.json`에는 기본 `content_scripts` 자동 주입을 두지 않는다. content script는 background가 활성 ChatGPT 탭 또는 큐가 있는 ChatGPT 탭에만 수동 주입한다.
 8. service worker 시작 시 전체 탭을 훑어서 content script를 주입하는 `kickAllTabs`류 동작을 넣으면 안 된다. 시작/설치/초기화 시에는 활성 ChatGPT 탭만 가볍게 확인한다.
