@@ -375,11 +375,16 @@ function startChatGptLightTitleBadgeKeepAlive() {
   if (!isChatGptSafeMode() || !monitoring || !IS_TOP_FRAME) return;
   ensureChatGptLightTitleObserver();
   if (chatGptLightTitleBadgeKeepAliveTimer) return;
+  const getDelay = () => {
+    const active = isFastStatusCheckWindow() || getSteeringQueueCountValue() > 0;
+    if (document.hidden) return active ? 7000 : 30000;
+    return active ? 1600 : 5000;
+  };
   const tick = () => {
     chatGptLightTitleBadgeKeepAliveTimer = null;
     if (!isChatGptSafeMode() || !monitoring || !IS_TOP_FRAME) return;
     runChatGptLightTitleBadgeSync();
-    chatGptLightTitleBadgeKeepAliveTimer = setTimeout(tick, document.hidden ? 7000 : 1600);
+    chatGptLightTitleBadgeKeepAliveTimer = setTimeout(tick, getDelay());
   };
   chatGptLightTitleBadgeKeepAliveTimer = setTimeout(tick, 900);
 }
@@ -548,7 +553,7 @@ function bindChatGptLightTitleBadgeTriggers() {
 var STEERING_AUTO_SEND_DELAY_MS = 1000;
 var STEERING_TURN_WATCHDOG_VISIBLE_MS = 12000;
 var STEERING_TURN_WATCHDOG_HIDDEN_MS = 20000;
-var READY_AI_CONTENT_VERSION = '2026-06-12.12-chatgpt-top-frame-probe';
+var READY_AI_CONTENT_VERSION = '2026-06-12.13-lazy-chatgpt-injection';
 try {
   var existingSteeringHost = document.getElementById('ready-ai-steering-host');
   if (existingSteeringHost) existingSteeringHost.remove();

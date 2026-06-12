@@ -19,7 +19,8 @@ try {
 // }
 let tabStates = {};
 // 프레임별 상태(iframe 대응)
-// - all_frames=true + (특정 사이트는 UI가 cross-origin iframe에 있을 수 있음)
+// - ChatGPT는 top frame만 감시한다. 전체 프레임 주입은 다중 탭에서 Chrome을 멈추게 만들 수 있다.
+// - 특정 사이트가 cross-origin iframe 감시를 요구할 때만 background에서 명시적으로 allFrames 재주입한다.
 // - 따라서 탭 단위 상태는 "프레임들 중 하나라도 생성중이면 ORANGE" 로 계산한다.
 // - 프레임 하나가 계속 false를 보내서 ORANGE->GREEN을 조기 트리거하는 문제를 막는다.
 let frameStates = {}; // { tabId: { frameId: { isGenerating, platform, siteName, ts } } }
@@ -65,7 +66,7 @@ const CHATGPT_NEW_CHAT_TAB_GAP_MS = 7_000;
 const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
-const READY_AI_CONTENT_VERSION = '2026-06-12.12-chatgpt-top-frame-probe';
+const READY_AI_CONTENT_VERSION = '2026-06-12.13-lazy-chatgpt-injection';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
 const TITLE_GUARD_MAIN_FILE = 'src/content/title-guard-main.js';
 const CONTENT_SCRIPT_FILES = Object.freeze([
@@ -552,7 +553,7 @@ function getDashboardItemsFromCache() {
   dashboardItemsCacheVersion = dashboardVersion;
   return dashboardItemsCache.slice();
 }
-function pScriptingExec(tabId, files, allFrames = true) {
+function pScriptingExec(tabId, files, allFrames = false) {
   return new Promise((resolve) => {
     try {
       if (!chrome.scripting?.executeScript) return resolve(false);
@@ -2471,9 +2472,9 @@ function purgeDisabledTabs() {
     if (removedAny) ensureSteeringQueueProbeAlarm();
   });
 }
-async function kickAllTabs(reason) {
+async function kickActiveChatGptTabs(reason) {
   getSiteConfig(async () => {
-    const tabs = await pTabsQuery({});
+    const tabs = await pTabsQuery({ active: true });
     let seeded = false;
     for (const t of tabs) {
       if (!t || typeof t.id !== 'number') continue;
@@ -2503,12 +2504,11 @@ async function kickAllTabs(reason) {
 }
 try {
   chrome.runtime.onStartup.addListener(() => {
-    safeActionCall(kickAllTabs('onStartup'));
+    safeActionCall(kickActiveChatGptTabs('onStartup'));
   });
 } catch (_) {}
 try {
   chrome.runtime.onInstalled.addListener(() => {
-    safeActionCall(kickAllTabs('onInstalled'));
+    safeActionCall(kickActiveChatGptTabs('onInstalled'));
   });
 } catch (_) {}
-safeActionCall(kickAllTabs('sw_init'));

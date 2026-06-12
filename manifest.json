@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ready_Ai",
-  "version": "0.2.18",
+  "version": "0.2.19",
   "description": "AI 답변 완료 알림, 탭 이름 관리, 후속 지시 성능 업그레이드",
   "background": {
     "service_worker": "src/background.js"
@@ -55,8 +55,8 @@
         "src/content/part-11.js",
         "src/content/part-12.js"
       ],
-      "all_frames": true,
-      "match_about_blank": true
+      "all_frames": false,
+      "match_about_blank": false
     }
   ],
   "icons": {

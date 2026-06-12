@@ -11,8 +11,8 @@ var completionStatus = 'idle'; // 'idle' | 'completed'
 var hasSentInitialState = false;
 // iframe(특히 AI Studio) 대응
 // - UI가 cross-origin iframe 안에 들어가면 top frame은 "생성중" 요소를 못 본다.
-// - all_frames=true 로 모든 프레임에 content script를 주입하고,
-//   프레임 URL이 사이트 패턴에 안 맞더라도 "탭 URL" 기준으로 감시를 켤 수 있게 한다.
+// - ChatGPT는 top frame만 감시한다. iframe/all_frames 감시는 Chrome 다중 탭 성능을 망가뜨릴 수 있다.
+// - AI Studio 같은 예외 사이트만 background에서 명시적으로 allFrames 재주입할 수 있다.
 var IS_TOP_FRAME = (() => {
   try { return window.top === window; } catch (_) { return true; }
 })();
@@ -35,7 +35,7 @@ function getTitleBadgeCountGlyph() {
 }
 // background(frame 합산) 쪽에서 stale frame을 안 남기기 위해
 // content는 주기적으로(기본 5s) 상태를 heartbeat로 보내준다.
-var HEARTBEAT_MS = 5000;
+var HEARTBEAT_MS = 30000;
 var _lastHeartbeatAt = 0;
 // ===== 백그라운드 탭에서도 완료 감지(특히 Gemini) =====
 // - Gemini는 DOM 변경이 childList가 아니라 attributes/style로만 일어나는 경우가 있어
@@ -44,7 +44,7 @@ var _lastHeartbeatAt = 0;
 var CHECK_INTERVAL_ACTIVE_MS = 450;
 var CHECK_INTERVAL_VISIBLE_IDLE_MS = 1200;
 var CHECK_INTERVAL_HIDDEN_ACTIVE_MS = 1400;
-var CHECK_INTERVAL_HIDDEN_IDLE_MS = 6000;
+var CHECK_INTERVAL_HIDDEN_IDLE_MS = 30000;
 var MIN_CHECK_GAP_ACTIVE_MS = 300;
 var MIN_CHECK_GAP_IDLE_MS = 420;
 var MIN_CHECK_GAP_HIDDEN_ACTIVE_MS = 900;
