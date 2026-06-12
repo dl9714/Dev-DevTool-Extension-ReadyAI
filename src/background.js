@@ -66,7 +66,7 @@ const CHATGPT_NEW_CHAT_TAB_GAP_MS = 7_000;
 const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
-const READY_AI_CONTENT_VERSION = '2026-06-12.15-active-chatgpt-injection';
+const READY_AI_CONTENT_VERSION = '2026-06-12.16-active-chatgpt-init';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
 const TITLE_GUARD_MAIN_FILE = 'src/content/title-guard-main.js';
 const CONTENT_SCRIPT_FILES = Object.freeze([
@@ -2532,3 +2532,4 @@ try {
     safeActionCall(kickActiveChatGptTabs('onInstalled'));
   });
 } catch (_) {}
+safeActionCall(kickActiveChatGptTabs('sw_init_active'));
