@@ -407,17 +407,22 @@ function bindSteeringUiEvents() {
       try { refs.input.value = ''; } catch (_) {}
       clearSteeringDraftAttachments();
     }
-    const ok = canAutoSendSteeringNow()
+    const ok = canUserRunSteeringQueueNow()
       ? await processSteeringQueue({ source: 'manual' })
-      : await resumeSteeringQueueNow({ source: 'resume_button' });
-    if (!ok && !steeringQueue.length) setSteeringStatus('전송할 대기가 없습니다.', true);
+      : false;
+    if (!ok) setSteeringStatus(getSteeringQueueWaitMessage(), !steeringQueue.length);
   }));
   steeringRefs.clear.addEventListener('click', consume(() => {
     clearSteeringQueue(true);
   }));
   steeringRefs.runNext.addEventListener('click', consume(async () => {
-    const ok = await resumeSteeringQueueNow({ source: 'resume_button' });
-    if (!ok) setSteeringStatus(steeringQueue.length ? '지금은 전송할 수 없습니다.' : '전송할 대기가 없습니다.', true);
+    if (!canUserRunSteeringQueueNow()) {
+      setSteeringStatus(getSteeringQueueWaitMessage(), !steeringQueue.length);
+      updateSteeringUi();
+      return;
+    }
+    const ok = await processSteeringQueue({ source: 'resume_button' });
+    if (!ok) setSteeringStatus(getSteeringQueueWaitMessage(), !steeringQueue.length);
   }));
   steeringRefs.clearQueue.addEventListener('click', consume(() => {
     clearSteeringQueue(true);

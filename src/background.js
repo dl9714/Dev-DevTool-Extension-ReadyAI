@@ -67,7 +67,7 @@ const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
 const READY_AI_CONTENT_VERSION = '2026-06-12.21-single-queue-dispatch';
-const READY_AI_CONTENT_BUILD_VERSION = '2026-06-12.28-chatgpt-bootstrap-passive-bg';
+const READY_AI_CONTENT_BUILD_VERSION = '2026-06-12.30-viewport-clamped-followup';
 const READY_AI_CANONICAL_EXTENSION_ID = 'deojggohikpfbhgdjbdogmkdgpkcighm';
 const READY_AI_LEGACY_MIRROR_EXTENSION_ID = 'ajnolilmicdilijebljgchoodgajnfeg';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
@@ -810,6 +810,22 @@ function shouldEnsureContentForTabEvent(tab) {
   if (tab.discarded) return false;
   if (isChatGptUrl(tab.url || '')) return true;
   return isMonitoredUrl(tab.url || '');
+}
+function ensureChatGptContentForNavigation(tabId, url, reason = 'chatgpt_navigation') {
+  if (isReadyAiPassiveDuplicateBackground()) return;
+  if (typeof tabId !== 'number' || !isChatGptUrl(url || '')) return;
+  safeActionCall((async () => {
+    const tab = await pTabsGet(tabId);
+    const candidate = {
+      ...(tab || {}),
+      id: tabId,
+      url: url || tab?.url || '',
+    };
+    if (!candidate.url || candidate.discarded || !isChatGptUrl(candidate.url)) return;
+    const ready = await ensureContentScripts(candidate, { allFrames: false, topFrameOnly: true, frameId: 0 });
+    if (!ready) return;
+    await pTabsSendMessage(tabId, { action: 'force_check', reason, topFrameOnly: true }, { frameId: 0 });
+  })());
 }
 function getChatGptNewChatUrl(sourceUrl) {
   try {
@@ -2514,6 +2530,30 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     })());
   }
 });
+if (chrome.webNavigation?.onCommitted) {
+  const chatGptNavigationFilter = {
+    url: [
+      { hostEquals: 'chatgpt.com' },
+      { hostEquals: 'chat.openai.com' },
+    ],
+  };
+  const handleChatGptNavigation = (details, reason) => {
+    if (!details || details.frameId !== 0) return;
+    ensureChatGptContentForNavigation(details.tabId, details.url, reason);
+  };
+  chrome.webNavigation.onCommitted.addListener(
+    (details) => handleChatGptNavigation(details, 'chatgpt_navigation_committed'),
+    chatGptNavigationFilter
+  );
+  chrome.webNavigation.onCompleted.addListener(
+    (details) => handleChatGptNavigation(details, 'chatgpt_navigation_completed'),
+    chatGptNavigationFilter
+  );
+  chrome.webNavigation.onHistoryStateUpdated.addListener(
+    (details) => handleChatGptNavigation(details, 'chatgpt_navigation_history'),
+    chatGptNavigationFilter
+  );
+}
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
   if (isReadyAiPassiveDuplicateBackground()) return;
   for (const id of Object.keys(tabMetaCache)) {

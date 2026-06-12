@@ -288,6 +288,21 @@ function canAutoSendSteeringNow() {
   if (isChatGptUnobservedSteeringTurnPending()) return false;
   return hasActiveSteeringOffer() && !steeringSendLock && !steeringProcessing && !steeringAwaitingResponseStart && !steeringAwaitingTurnCompletion;
 }
+function canUserRunSteeringQueueNow() {
+  return !!(monitoring && steeringEnabled && steeringQueue.length && canAutoSendSteeringNow());
+}
+function getSteeringQueueWaitMessage() {
+  if (!steeringQueue.length) return '전송할 대기가 없습니다.';
+  if (steeringProcessing) return '전송 처리 중입니다.';
+  if (isGenerating || steeringAwaitingResponseStart || steeringAwaitingTurnCompletion || steeringSendLock) {
+    return '후속 대기 중입니다. 응답이 끝나면 자동 전송합니다.';
+  }
+  return '지금은 전송할 수 없습니다.';
+}
+function getSteeringResumeButtonTitle() {
+  if (canUserRunSteeringQueueNow()) return '다음 후속 지시를 지금 전송합니다.';
+  return getSteeringQueueWaitMessage();
+}
 function wakeSteeringQueueAfterVisibilityRestore(reason = 'visibility') {
   if (!monitoring || !steeringEnabled || !steeringQueue.length || steeringProcessing) return false;
   if (!canAutoSendSteeringNow()) {
@@ -443,9 +458,29 @@ function shouldDockSteeringAtViewportBottom() {
   if (getSiteKey() !== 'chatgpt') return false;
   return !hasChatGptConversationTurns();
 }
+function getSteeringLayoutPositionKey() {
+  return [
+    steeringPanelOpen ? 'open' : 'closed',
+    steeringQueue.length ? 'queued' : 'empty',
+    steeringAdvancedEnabled ? 'advanced' : 'basic',
+  ].join(':');
+}
+function clampSteeringHostToViewportTop(minTop = 12) {
+  if (!steeringHost) return;
+  try {
+    const rect = steeringHost.getBoundingClientRect();
+    if (!rect || rect.top >= minTop) return;
+    const currentBottom = Number.parseFloat(steeringHost.style.bottom || '0');
+    if (!Number.isFinite(currentBottom)) return;
+    const overflow = Math.ceil(minTop - rect.top);
+    const nextBottom = Math.max(12, Math.round(currentBottom - overflow));
+    if (nextBottom !== currentBottom) steeringHost.style.bottom = `${nextBottom}px`;
+  } catch (_) {}
+}
 function positionSteeringUi(force = false) {
   if (!steeringHost) return;
   const anchor = getSteeringAnchorElement();
+  const layoutKey = getSteeringLayoutPositionKey();
   if (anchor) {
     try {
       const rect = anchor.getBoundingClientRect();
@@ -454,7 +489,7 @@ function positionSteeringUi(force = false) {
       const right = Math.max(12, Math.round(window.innerWidth - rect.right - chatGptRightShift));
       const bottomAnchor = isChatGpt ? (window.innerHeight - 122) : (rect.top - 10);
       const bottom = Math.max(12, Math.round(window.innerHeight - bottomAnchor));
-      const signature = `${right}|${bottom}|${isChatGpt ? 'chatgpt-stable' : 'anchor'}`;
+      const signature = `${right}|${bottom}|${isChatGpt ? 'chatgpt-stable' : 'anchor'}|${layoutKey}`;
       if (!force && steeringLastPositionSignature === signature) return;
       steeringLastPositionSignature = signature;
       steeringHost.style.left = 'auto';
@@ -465,7 +500,7 @@ function positionSteeringUi(force = false) {
     } catch (_) {}
   }
   if (shouldDockSteeringAtViewportBottom()) {
-    const bottomDockSignature = '18|18|bottomdock';
+    const bottomDockSignature = `18|18|bottomdock|${layoutKey}`;
     if (!force && steeringLastPositionSignature === bottomDockSignature) return;
     steeringLastPositionSignature = bottomDockSignature;
     steeringHost.style.left = 'auto';
@@ -474,7 +509,7 @@ function positionSteeringUi(force = false) {
     steeringHost.style.bottom = '18px';
     return;
   }
-  const fallbackSignature = '18|140';
+  const fallbackSignature = `18|140|${layoutKey}`;
   if (!force && steeringLastPositionSignature === fallbackSignature) return;
   steeringLastPositionSignature = fallbackSignature;
   steeringHost.style.left = 'auto';

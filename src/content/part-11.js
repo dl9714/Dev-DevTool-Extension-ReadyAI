@@ -81,8 +81,15 @@ function applySteeringUiNow() {
   setSteeringDisabledIfChanged(refs.newChatSend, steeringNewChatSendPending || !steeringAdvancedEnabled || !hasDraftText || hasDraftImages);
   setSteeringDisabledIfChanged(refs.sendNow, !steeringQueue.length && !hasDraftText && !hasDraftImages);
   setSteeringDisabledIfChanged(refs.clear, !steeringQueue.length && !hasDraftText && !hasDraftImages);
-  if (refs.runNext) setSteeringTextIfChanged(refs.runNext, getSteeringResumeLabel());
-  setSteeringDisabledIfChanged(refs.runNext, !steeringQueue.length);
+  const canRunNext = canUserRunSteeringQueueNow();
+  if (refs.runNext) {
+    setSteeringTextIfChanged(refs.runNext, getSteeringResumeLabel());
+    setSteeringDisabledIfChanged(refs.runNext, !canRunNext);
+    setSteeringClassToggleIfChanged(refs.runNext, 'resume', canRunNext);
+    const runNextTitle = getSteeringResumeButtonTitle();
+    if (refs.runNext.title !== runNextTitle) refs.runNext.title = runNextTitle;
+    refs.runNext.setAttribute('aria-disabled', canRunNext ? 'false' : 'true');
+  }
   setSteeringDisabledIfChanged(refs.clearQueue, !steeringQueue.length);
   setSteeringDisplayIfChanged(refs.launcherRow, steeringLauncherVisible ? 'inline-flex' : 'none');
   setSteeringDisplayIfChanged(refs.launcher, steeringLauncherVisible ? 'inline-flex' : 'none');
@@ -94,6 +101,7 @@ function applySteeringUiNow() {
   renderSteeringAttachments();
   syncSteeringAttachmentPreview();
   syncSteeringQueueCount();
+  clampSteeringHostToViewportTop();
   syncTitleBadgeFromUiRender(false);
   setSteeringDisplayIfChanged(steeringHost, (steeringPanelOpen || steeringLauncherVisible) ? 'block' : 'none');
 }
