@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ready_Ai",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "AI 답변 완료 알림, 탭 이름 관리, 후속 지시 성능 업그레이드",
   "background": {
     "service_worker": "src/background.js"
@@ -26,6 +26,38 @@
   ],
   "host_permissions": [
     "<all_urls>"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://gemini.google.com/*",
+        "https://aistudio.google.com/*",
+        "https://makersuite.google.com/*",
+        "https://claude.ai/*",
+        "https://www.perplexity.ai/*",
+        "https://perplexity.ai/*",
+        "https://copilot.microsoft.com/*"
+      ],
+      "js": [
+        "src/sites.js",
+        "src/content/part-01.js",
+        "src/content/part-02.js",
+        "src/content/part-03.js",
+        "src/content/part-04.js",
+        "src/content/part-05.js",
+        "src/content/part-06.js",
+        "src/content/part-07.js",
+        "src/content/part-08.js",
+        "src/content/part-09.js",
+        "src/content/part-10.js",
+        "src/content/part-11.js",
+        "src/content/part-12.js"
+      ],
+      "all_frames": true,
+      "match_about_blank": true
+    }
   ],
   "icons": {
     "16": "assets/bell_profile.png",
