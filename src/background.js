@@ -59,12 +59,13 @@ const GEMINI_PROBE_ALARM = 'ready_ai_gemini_probe';
 const STEERING_QUEUE_PROBE_ALARM = 'ready_ai_steering_queue_probe';
 const GEMINI_PROBE_MIN_PERIOD_MIN = 1; // chrome.alarms 최소 1분
 const STEERING_QUEUE_PROBE_MIN_PERIOD_MIN = 1;
+const STEERING_QUEUE_PROBE_MAX_TABS_PER_TICK = 3;
 const GEMINI_PROBE_NUDGE_COOLDOWN_MS = 30_000; // 너무 자주 탭 전환하면 거슬림
 const CHATGPT_NEW_CHAT_TAB_GAP_MS = 7_000;
 const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
-const READY_AI_CONTENT_VERSION = '2026-06-12.11-codex-like-queue-grip';
+const READY_AI_CONTENT_VERSION = '2026-06-12.12-chatgpt-top-frame-probe';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
 const TITLE_GUARD_MAIN_FILE = 'src/content/title-guard-main.js';
 const CONTENT_SCRIPT_FILES = Object.freeze([
@@ -724,9 +725,10 @@ async function ensureContentScripts(tab, options = {}) {
   if (!url) return false;
   const site = resolveSiteForUrl(url);
   if (!site) return false; // 등록/활성된 사이트만
-  const messageOptions = options.frameId === 0 ? { frameId: 0 } : null;
-  const topFrameOnly = !!options.topFrameOnly;
-  const injectAllFrames = options.allFrames !== false;
+  const chatGptTopFrameOnly = site?.key === 'chatgpt' || isChatGptUrl(url);
+  const messageOptions = (options.frameId === 0 || chatGptTopFrameOnly) ? { frameId: 0 } : null;
+  const topFrameOnly = !!options.topFrameOnly || chatGptTopFrameOnly;
+  const injectAllFrames = chatGptTopFrameOnly ? false : options.allFrames !== false;
   // 1) ping으로 content 존재 확인. 구버전 content script는 버전이 없으므로 재주입한다.
   const alive = await pTabsSendMessageResult(tabId, { action: 'ping', topFrameOnly }, 1500, messageOptions);
   if (alive?.ok && alive.readyAiContentVersion === READY_AI_CONTENT_VERSION && !options.forceInject) {
@@ -740,7 +742,7 @@ async function ensureContentScripts(tab, options = {}) {
   if (site?.key !== 'chatgpt') await ensureMainWorldTitleGuard(tabId);
   // 3) 주입 직후 즉시 체크 요청
   const reinjected = await pTabsSendMessageResult(tabId, { action: 'ping', topFrameOnly }, 1500, messageOptions);
-  await pTabsSendMessage(tabId, { action: 'force_check', reason: 'inject' }, messageOptions);
+  await pTabsSendMessage(tabId, { action: 'force_check', reason: 'inject', topFrameOnly }, messageOptions);
   return !!reinjected?.ok;
 }
 function isChatGptUrl(url) {
@@ -1814,9 +1816,16 @@ async function tickGeminiProbe() {
   if (!pick?.tab?.id) return;
   await nudgeTabForGeminiCompletion(pick.tab.id, pick.tab.windowId);
 }
+let steeringQueueProbeInFlight = false;
+let steeringQueueProbeCursor = 0;
+function isQueuedSteeringProbeCandidate(tabId, state) {
+  if (Math.max(0, Number(state?.steeringQueueCount) || 0) <= 0) return false;
+  const metaUrl = tabMetaCache?.[tabId]?.url || '';
+  return state?.platform === 'chatgpt' || isChatGptUrl(metaUrl);
+}
 function getQueuedSteeringTabIds() {
   return Object.entries(tabStates)
-    .filter(([, state]) => Math.max(0, Number(state?.steeringQueueCount) || 0) > 0)
+    .filter(([tabId, state]) => isQueuedSteeringProbeCandidate(tabId, state))
     .map(([tabId]) => parseInt(tabId, 10))
     .filter(Number.isFinite);
 }
@@ -1831,21 +1840,32 @@ function ensureSteeringQueueProbeAlarm() {
   } catch (_) {}
 }
 async function tickSteeringQueueProbe() {
+  if (steeringQueueProbeInFlight) return;
+  steeringQueueProbeInFlight = true;
   const queuedTabIds = getQueuedSteeringTabIds();
   if (!queuedTabIds.length) {
+    steeringQueueProbeInFlight = false;
     ensureSteeringQueueProbeAlarm();
     return;
   }
-  const tabs = await pTabsQuery({});
-  const tabsById = new Map((tabs || []).filter((tab) => typeof tab?.id === 'number').map((tab) => [tab.id, tab]));
-  for (const tabId of queuedTabIds) {
-    const tab = tabsById.get(tabId);
-    if (!tab || !isMonitoredUrl(tab.url || '')) continue;
-    await ensureContentScripts(tab);
-    await pTabsSendMessage(tabId, { action: 'force_check', reason: 'steering_queue_probe', topFrameOnly: true }, { frameId: 0 });
-    await pTabsSendMessage(tabId, { action: 'process_steering_queue_now', reason: 'steering_queue_probe', topFrameOnly: true }, { frameId: 0 });
+  try {
+    const tabs = await pTabsQuery({});
+    const tabsById = new Map((tabs || []).filter((tab) => typeof tab?.id === 'number').map((tab) => [tab.id, tab]));
+    const start = Math.max(0, steeringQueueProbeCursor % queuedTabIds.length);
+    const rotated = queuedTabIds.slice(start).concat(queuedTabIds.slice(0, start));
+    const picked = rotated.slice(0, STEERING_QUEUE_PROBE_MAX_TABS_PER_TICK);
+    steeringQueueProbeCursor = (start + picked.length) % queuedTabIds.length;
+    for (const tabId of picked) {
+      const tab = tabsById.get(tabId);
+      if (!tab || !isChatGptUrl(tab.url || '')) continue;
+      await ensureContentScripts(tab, { allFrames: false, topFrameOnly: true, frameId: 0 });
+      await pTabsSendMessage(tabId, { action: 'force_check', reason: 'steering_queue_probe', topFrameOnly: true }, { frameId: 0 });
+      await pTabsSendMessage(tabId, { action: 'process_steering_queue_now', reason: 'steering_queue_probe', forceResume: true, topFrameOnly: true }, { frameId: 0 });
+    }
+  } finally {
+    steeringQueueProbeInFlight = false;
+    ensureSteeringQueueProbeAlarm();
   }
-  ensureSteeringQueueProbeAlarm();
 }
 async function nudgeTabForGeminiCompletion(targetTabId, windowId) {
   // 안전장치: 현재 tabStates가 ORANGE가 아니면 굳이 안 건드린다.
@@ -2154,6 +2174,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'status_update') {
     const platform = message.platform;
     const siteName = message.siteName;
+    const chatGptStatus = platform === 'chatgpt' || isChatGptUrl(sender.tab?.url || sender.url || '');
+    if (chatGptStatus && frameId !== 0) return;
+    if (chatGptStatus && frameStates[tabId]) {
+      for (const key of Object.keys(frameStates[tabId])) {
+        if (String(key) !== '0') delete frameStates[tabId][key];
+      }
+    }
     const prevState = tabStates[tabId] ? { ...tabStates[tabId] } : null;
     const prevStatus = prevState?.status;
     const prevOrangeCount = getOrangeTabCount();
@@ -2248,6 +2275,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   }
   if (message.action === 'steering_queue_update') {
+    if (frameId !== 0) return;
     const prevState = tabStates[tabId] ? { ...tabStates[tabId] } : {};
     const now = Date.now();
     const nextCount = Math.max(0, Number(message.count) || 0);
@@ -2344,7 +2372,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
           await pTabsSendMessage(tabId, { action: 'force_title_sync', reason: 'tab_title' }, { frameId: 0 });
           return;
         }
-        await pTabsSendMessage(tabId, { action: 'force_check', reason: changeInfo.status === 'complete' ? 'tab_complete' : 'tab_url' });
+        await pTabsSendMessage(
+          tabId,
+          { action: 'force_check', reason: changeInfo.status === 'complete' ? 'tab_complete' : 'tab_url', topFrameOnly: isChatGptUrl(candidate.url || '') },
+          isChatGptUrl(candidate.url || '') ? { frameId: 0 } : null
+        );
       })());
     }
   }
@@ -2360,7 +2392,11 @@ chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
     const tab = await pTabsGet(tabId);
     if (!tab?.id || !isMonitoredUrl(tab.url || '')) return;
     const ready = await ensureContentScripts(tab);
-    if (ready) await pTabsSendMessage(tabId, { action: 'force_check', reason: 'tab_activated' });
+    if (ready) await pTabsSendMessage(
+      tabId,
+      { action: 'force_check', reason: 'tab_activated', topFrameOnly: isChatGptUrl(tab.url || '') },
+      isChatGptUrl(tab.url || '') ? { frameId: 0 } : null
+    );
   })());
 });
 // 알림 클릭 시 해당 탭으로 이동
@@ -2444,6 +2480,7 @@ async function kickAllTabs(reason) {
       const url = t.url || '';
       const site = resolveSiteForUrl(url);
       if (!site) continue; // 등록/활성된 사이트만
+      if (!isChatGptUrl(url)) continue;
       // 상태가 비어 있으면 최소 WHITE(표시는 연두색)라도 찍어서 "완전 공백"을 방지
       if (!tabStates[t.id]) {
         tabStates[t.id] = {
@@ -2458,8 +2495,8 @@ async function kickAllTabs(reason) {
         updateIcon(t.id);
       }
       // content가 없으면 주입해서 title 뱃지도 복구
-      safeActionCall(ensureContentScripts(t));
-      safeActionCall(pTabsSendMessage(t.id, { action: 'force_check', reason: reason || 'kick' }));
+      safeActionCall(ensureContentScripts(t, { allFrames: false, topFrameOnly: true, frameId: 0 }));
+      safeActionCall(pTabsSendMessage(t.id, { action: 'force_check', reason: reason || 'kick', topFrameOnly: true }, { frameId: 0 }));
     }
     if (seeded) bumpDashboardVersion();
   });

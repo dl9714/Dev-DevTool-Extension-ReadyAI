@@ -34,6 +34,7 @@ function getSteeringQueueCountLabel() {
   return `대기중: ${getSteeringQueueCountText()}`;
 }
 function syncSteeringQueueCount(force = false) {
+  if (!IS_TOP_FRAME) return;
   const count = Math.max(0, Number(steeringQueue.length) || 0);
   if (!force && steeringLastReportedQueueCount === count) return;
   steeringLastReportedQueueCount = count;

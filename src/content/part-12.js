@@ -167,6 +167,11 @@ function stopMonitoring() {
   hideSteeringUi();
 }
 var _bootRetryCount = 0;
+function shouldSkipFrameMonitoringForSite(site) {
+  if (IS_TOP_FRAME) return false;
+  const key = String(site?.key || site?.detection || '').toLowerCase();
+  return key === 'chatgpt';
+}
 function refreshSiteFromStorage() {
   // sites.js가 아직 준비되지 않은 상태(세션 복원 타이밍 등)에서는
   // 뱃지가 초기화되지 않고 그대로 비는 현상이 생길 수 있어, 짧게 재시도한다.
@@ -191,6 +196,10 @@ function refreshSiteFromStorage() {
       site = null;
     }
     if (site) {
+      if (shouldSkipFrameMonitoringForSite(site)) {
+        stopMonitoring();
+        return;
+      }
       startMonitoring(site);
       return;
     }
@@ -205,7 +214,7 @@ function refreshSiteFromStorage() {
         } catch (_) {
           tabSite = null;
         }
-        if (tabSite) startMonitoring(tabSite);
+        if (tabSite && !shouldSkipFrameMonitoringForSite(tabSite)) startMonitoring(tabSite);
         else stopMonitoring();
       });
       return;
