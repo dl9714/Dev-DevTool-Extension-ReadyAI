@@ -490,7 +490,8 @@ function positionSteeringUi(force = false) {
       const rect = anchor.getBoundingClientRect();
       const isChatGpt = getSiteKey() === 'chatgpt';
       const chatGptRightShift = isChatGpt ? 250 : 0;
-      const right = Math.max(12, Math.round(window.innerWidth - rect.right - chatGptRightShift));
+      const chatGptScrollbarGutter = isChatGpt ? 6 : 0;
+      const right = Math.max(12 + chatGptScrollbarGutter, Math.round(window.innerWidth - rect.right - chatGptRightShift + chatGptScrollbarGutter));
       const bottomAnchor = isChatGpt ? (window.innerHeight - 122) : (rect.top - 10);
       const bottom = Math.max(12, Math.round(window.innerHeight - bottomAnchor));
       const signature = `${right}|${bottom}|${isChatGpt ? 'chatgpt-stable' : 'anchor'}|${layoutKey}`;
