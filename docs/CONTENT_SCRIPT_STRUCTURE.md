@@ -25,6 +25,8 @@ The background service worker manually injects content scripts only for the
 active ChatGPT tab, queued ChatGPT tabs, or an explicit popup target tab.
 For ChatGPT, injection must stay top-frame-only.
 
+When a top-level ChatGPT URL loads, the background must ensure the content script even if the tab-active cache is stale. Chrome can emit URL/status events before this extension's active-tab metadata catches up, which otherwise makes newly opened ChatGPT tabs miss the follow-up launcher. This is safe only because ChatGPT injection remains top-frame-only and `readyAiContentVersion` stays stable.
+
 Manual injection load order:
 
 1. `src/sites.js`

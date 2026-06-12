@@ -791,11 +791,9 @@ function isKnownActiveTab(tab) {
 }
 function shouldEnsureContentForTabEvent(tab) {
   if (!tab?.id || !tab.url) return false;
-  if (!isChatGptUrl(tab.url || '')) return isMonitoredUrl(tab.url || '');
-  if (isKnownActiveTab(tab)) return true;
-  if (getTabSteeringQueueCount(tab.id) > 0) return true;
-  if (tabStates?.[tab.id]?.status === 'ORANGE') return true;
-  return false;
+  if (tab.discarded) return false;
+  if (isChatGptUrl(tab.url || '')) return true;
+  return isMonitoredUrl(tab.url || '');
 }
 function getChatGptNewChatUrl(sourceUrl) {
   try {
