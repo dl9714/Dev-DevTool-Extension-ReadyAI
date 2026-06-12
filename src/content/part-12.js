@@ -286,7 +286,9 @@ refreshSiteFromStorage();
 console.log('[Ready_Ai] content script loaded');
 // background(service_worker)에서 강제 체크 요청
 try {
+  ((readyAiContentInstanceSeq) => {
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (!isReadyAiCurrentContentInstance(readyAiContentInstanceSeq)) return false;
     if (!msg) return;
     if (msg.topFrameOnly && !IS_TOP_FRAME) return;
     const action = String(msg.action || '');
@@ -366,7 +368,7 @@ try {
         try { sendResponse?.({ ok: false, message: '후속 지시 기능이 꺼져 있습니다.' }); } catch (_) {}
         return;
       }
-      const item = enqueueSteeringPrompt(text, { files: [] });
+      const item = enqueueSteeringPrompt(text, { files: [], source: 'runtime' });
       if (!item) {
         try { sendResponse?.({ ok: false, message: '대기열 추가 실패' }); } catch (_) {}
         return;
@@ -419,4 +421,5 @@ try {
       return;
     }
   });
+  })(getReadyAiContentInstanceSeq());
 } catch (_) {}

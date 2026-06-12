@@ -256,6 +256,31 @@ function armSteeringSendLock(ms = 2000) {
     updateSteeringUi();
   }, Math.max(200, ms));
 }
+function acquireSteeringQueueDispatchLock(reason = '') {
+  const now = Date.now();
+  const token = `${now}:${Math.random().toString(36).slice(2)}`;
+  try {
+    const lock = globalThis.__ReadyAiSteeringQueueDispatchLock || {};
+    if (Number(lock.until) > now) return '';
+    globalThis.__ReadyAiSteeringQueueDispatchLock = {
+      token,
+      until: now + STEERING_QUEUE_DISPATCH_LOCK_MS,
+      reason: String(reason || ''),
+    };
+    return token;
+  } catch (_) {
+    return token;
+  }
+}
+function releaseSteeringQueueDispatchLock(token) {
+  if (!token) return;
+  try {
+    const lock = globalThis.__ReadyAiSteeringQueueDispatchLock || {};
+    if (lock.token === token) {
+      globalThis.__ReadyAiSteeringQueueDispatchLock = null;
+    }
+  } catch (_) {}
+}
 function hasActiveSteeringOffer() {
   return !isGenerating && (completionStatus === 'completed' || completionStatus === 'idle');
 }

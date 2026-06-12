@@ -270,10 +270,37 @@ function renderSteeringQueue() {
   });
   steeringRefs.queue.appendChild(fragment);
 }
+function getSteeringQueueDedupeSignature(text, files = []) {
+  const fileSig = (Array.isArray(files) ? files : []).map((item) => [
+    String(item?.name || ''),
+    String(item?.type || ''),
+    Math.max(0, Number(item?.size) || 0),
+  ]);
+  return JSON.stringify([String(text || '').replace(/\s+/g, ' ').trim(), fileSig]);
+}
+function shouldDropRuntimeSteeringEnqueue(signature) {
+  const now = Date.now();
+  if (
+    signature
+    && steeringLastRuntimeEnqueueSignature === signature
+    && now - steeringLastRuntimeEnqueueAt <= STEERING_RUNTIME_ENQUEUE_DEDUPE_MS
+  ) {
+    return true;
+  }
+  steeringLastRuntimeEnqueueSignature = signature;
+  steeringLastRuntimeEnqueueAt = now;
+  return false;
+}
 function enqueueSteeringPrompt(text, options = {}) {
   const value = String(text || '').trim();
   const files = (Array.isArray(options.files) ? options.files : (Array.isArray(options.images) ? options.images : [])).filter((item) => item?.file);
   if (!value && !files.length) return null;
+  if (options.source === 'runtime') {
+    const signature = getSteeringQueueDedupeSignature(value, files);
+    if (shouldDropRuntimeSteeringEnqueue(signature)) {
+      return steeringQueue[steeringQueue.length - 1] || null;
+    }
+  }
   const item = {
     id: steeringQueueSeq++,
     text: value,
