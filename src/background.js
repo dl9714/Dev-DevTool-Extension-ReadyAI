@@ -67,7 +67,9 @@ const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
 const READY_AI_CONTENT_VERSION = '2026-06-12.21-single-queue-dispatch';
-const READY_AI_CONTENT_BUILD_VERSION = '2026-06-12.26-stable-version-handshake';
+const READY_AI_CONTENT_BUILD_VERSION = '2026-06-12.28-chatgpt-bootstrap-passive-bg';
+const READY_AI_CANONICAL_EXTENSION_ID = 'deojggohikpfbhgdjbdogmkdgpkcighm';
+const READY_AI_LEGACY_MIRROR_EXTENSION_ID = 'ajnolilmicdilijebljgchoodgajnfeg';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
 const TITLE_GUARD_MAIN_FILE = 'src/content/title-guard-main.js';
 const CONTENT_SCRIPT_FILES = Object.freeze([
@@ -85,6 +87,18 @@ const CONTENT_SCRIPT_FILES = Object.freeze([
   'src/content/part-11.js',
   'src/content/part-12.js',
 ]);
+function getReadyAiRuntimeId() {
+  try {
+    return String(chrome?.runtime?.id || '');
+  } catch (_) {
+    return '';
+  }
+}
+function isReadyAiPassiveDuplicateBackground() {
+  const runtimeId = getReadyAiRuntimeId();
+  return runtimeId === READY_AI_LEGACY_MIRROR_EXTENSION_ID
+    && runtimeId !== READY_AI_CANONICAL_EXTENSION_ID;
+}
 const SOUND_PRESETS = Object.freeze({
   off: 'off',
   soft: 'soft',
@@ -719,6 +733,7 @@ function getSoundOptionsByKind(kind) {
   };
 }
 async function ensureContentScripts(tab, options = {}) {
+  if (isReadyAiPassiveDuplicateBackground()) return false;
   // 세션 복원/탭 discard 타이밍에 따라 content script가 아직 주입되지 않은 탭이 생긴다.
   // 이 경우 title 뱃지(이모지)와 status_update가 올라오지 않아서 “뱃지 사라짐”처럼 보인다.
   const tabId = tab?.id;
@@ -748,6 +763,7 @@ async function ensureContentScripts(tab, options = {}) {
   return !!reinjected?.ok;
 }
 async function ensureContentForPopupTab(tabId, reason = 'popup') {
+  if (isReadyAiPassiveDuplicateBackground()) return { ok: false, message: 'passive duplicate Ready_Ai instance' };
   const tab = await pTabsGet(tabId);
   if (!tab?.id || !tab.url) return { ok: false, message: 'tab not found' };
   const site = resolveSiteForUrl(tab.url || '');
@@ -1601,6 +1617,7 @@ function pIdleQueryState(idleSec) {
   });
 }
 function clearBadgesForAllTabs(options = {}) {
+  if (isReadyAiPassiveDuplicateBackground()) return;
   actionStateCache = {};
   // Legacy completion badges are disabled; queue count badges are restored by updateIcon.
   safeActionCall(chrome.action.setBadgeText({ text: '' }));
@@ -1639,6 +1656,10 @@ function refreshTrackedTabs() {
   }
 }
 function ensureGeminiProbeAlarm() {
+  if (isReadyAiPassiveDuplicateBackground()) {
+    try { chrome.alarms.clear(GEMINI_PROBE_ALARM); } catch (_) {}
+    return;
+  }
   // 설정값이 바뀌었을 때, alarms를 즉시 반영
   const enabled = !!settings.geminiProbeEnabled;
   if (!enabled) {
@@ -1680,6 +1701,11 @@ chrome.storage.local.get([
   STORAGE_KEYS.CUSTOM_TAB_TITLES,
   STORAGE_KEYS.CHATGPT_RATE_LIMIT_UNTIL,
 ], (res) => {
+  if (isReadyAiPassiveDuplicateBackground()) {
+    try { chrome.alarms.clear(GEMINI_PROBE_ALARM); } catch (_) {}
+    try { chrome.alarms.clear(STEERING_QUEUE_PROBE_ALARM); } catch (_) {}
+    return;
+  }
   if (typeof res[STORAGE_KEYS.DND_MODE] === 'boolean') settings.dndMode = res[STORAGE_KEYS.DND_MODE];
   if (typeof res[STORAGE_KEYS.BADGE_ENABLED] === 'boolean') settings.badgeEnabled = res[STORAGE_KEYS.BADGE_ENABLED];
   if (typeof res[STORAGE_KEYS.BADGE_COUNT_ENABLED] === 'boolean') settings.badgeCountEnabled = res[STORAGE_KEYS.BADGE_COUNT_ENABLED];
@@ -1715,6 +1741,7 @@ chrome.storage.local.get([
 });
 // 설정 변경 감지 (Popup에서 변경 시)
 chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (isReadyAiPassiveDuplicateBackground()) return;
   if (areaName && areaName !== 'local') return;
   let dashboardRelevantChanged = false;
   if (changes[STORAGE_KEYS.DND_MODE]) {
@@ -1873,6 +1900,10 @@ function getQueuedSteeringTabIds() {
     .filter(Number.isFinite);
 }
 function ensureSteeringQueueProbeAlarm() {
+  if (isReadyAiPassiveDuplicateBackground()) {
+    try { chrome.alarms.clear(STEERING_QUEUE_PROBE_ALARM); } catch (_) {}
+    return;
+  }
   const hasQueuedTabs = getQueuedSteeringTabIds().length > 0;
   try {
     if (!hasQueuedTabs) {
@@ -1883,6 +1914,7 @@ function ensureSteeringQueueProbeAlarm() {
   } catch (_) {}
 }
 async function tickSteeringQueueProbe() {
+  if (isReadyAiPassiveDuplicateBackground()) return;
   if (steeringQueueProbeInFlight) return;
   steeringQueueProbeInFlight = true;
   const queuedTabIds = getQueuedSteeringTabIds();
@@ -1935,6 +1967,7 @@ async function nudgeTabForGeminiCompletion(targetTabId, windowId) {
 }
 try {
   chrome.alarms.onAlarm.addListener((alarm) => {
+    if (isReadyAiPassiveDuplicateBackground()) return;
     if (!alarm) return;
     if (alarm.name === GEMINI_PROBE_ALARM) {
       safeActionCall(tickGeminiProbe());
@@ -2148,6 +2181,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!sender.tab) return;
   const tabId = sender.tab.id;
   const frameId = typeof sender.frameId === 'number' ? sender.frameId : 0;
+  if (message.action === 'ensure_content_for_current_chatgpt_tab') {
+    if (isReadyAiPassiveDuplicateBackground()) {
+      sendResponse({ ok: false, passive: true });
+      return;
+    }
+    const tabUrl = sender.tab?.url || sender.url || '';
+    if (frameId !== 0 || !isChatGptUrl(tabUrl)) {
+      sendResponse({ ok: false, message: 'not top-frame ChatGPT' });
+      return;
+    }
+    ensureContentScripts(sender.tab, { allFrames: false, topFrameOnly: true, frameId: 0 })
+      .then(async (ready) => {
+        if (ready) {
+          await pTabsSendMessage(tabId, {
+            action: 'force_check',
+            reason: message.reason || 'chatgpt_bootstrap',
+            topFrameOnly: true,
+          }, { frameId: 0 });
+        }
+        sendResponse({
+          ok: !!ready,
+          readyAiContentVersion: READY_AI_CONTENT_VERSION,
+          readyAiContentBuildVersion: READY_AI_CONTENT_BUILD_VERSION,
+        });
+      })
+      .catch((err) => sendResponse({ ok: false, message: err?.message || 'content injection failed' }));
+    return true;
+  }
+  if (isReadyAiPassiveDuplicateBackground()) return;
   if (message.action === 'open_chatgpt_new_chat_tabs') {
     openChatGptNewChatTabsForPrompt(message, sender)
       .then((result) => sendResponse(result))
@@ -2363,6 +2425,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.action === 'get_dashboard_meta') {
+    if (isReadyAiPassiveDuplicateBackground()) {
+      sendResponse({ ok: true, passive: true, version: dashboardVersion, itemsCount: 0, hasOrange: false, hasGreen: false });
+      return;
+    }
     sendResponse({
       ok: true,
       version: dashboardVersion,
@@ -2373,6 +2439,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return;
   }
   if (message?.action !== 'get_dashboard') return;
+  if (isReadyAiPassiveDuplicateBackground()) {
+    sendResponse({
+      ok: true,
+      passive: true,
+      version: dashboardVersion,
+      items: [],
+      snoozeUntil: 0,
+      history: [],
+      quietHoursActive: false,
+      quietHoursEnabled: false,
+      quietHoursStart: DEFAULT_SETTINGS.quietHoursStart,
+      quietHoursEnd: DEFAULT_SETTINGS.quietHoursEnd,
+      suppressionReason: '',
+    });
+    return;
+  }
   ensureTabMetaCache(() => {
     sendResponse({
       ok: true,
@@ -2390,16 +2472,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 chrome.tabs.query({}, (tabs) => {
+  if (isReadyAiPassiveDuplicateBackground()) return;
   tabMetaCache = {};
   for (const tab of (Array.isArray(tabs) ? tabs : [])) upsertTabMetaFromTab(tab);
   tabCacheInitialized = true;
 });
 chrome.tabs.onCreated.addListener((tab) => {
+  if (isReadyAiPassiveDuplicateBackground()) return;
   upsertTabMetaFromTab(tab);
   tabCacheInitialized = true;
   bumpDashboardVersion();
 });
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (isReadyAiPassiveDuplicateBackground()) return;
   const prevMeta = tabMetaCache[tabId] || {};
   upsertTabMetaFromTab({ ...prevMeta, ...(tab || {}), id: tabId, ...changeInfo });
   if ('title' in changeInfo || 'url' in changeInfo || 'discarded' in changeInfo || 'status' in changeInfo) {
@@ -2430,6 +2515,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
+  if (isReadyAiPassiveDuplicateBackground()) return;
   for (const id of Object.keys(tabMetaCache)) {
     if ((tabMetaCache[id]?.windowId || null) === windowId) {
       tabMetaCache[id] = { ...(tabMetaCache[id] || {}), active: Number(id) === tabId };
@@ -2449,6 +2535,7 @@ chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
 });
 // 알림 클릭 시 해당 탭으로 이동
 chrome.notifications.onClicked.addListener((notificationId) => {
+  if (isReadyAiPassiveDuplicateBackground()) return;
   let tabId = null;
   const target = notificationTargets[notificationId];
   if (target?.type === 'single' && typeof target.tabId === 'number') {
@@ -2469,10 +2556,12 @@ chrome.notifications.onClicked.addListener((notificationId) => {
   // (클릭/스크롤로만 🟢로 전환)
 });
 chrome.notifications.onClosed.addListener((notificationId) => {
+  if (isReadyAiPassiveDuplicateBackground()) return;
   delete notificationTargets[notificationId];
 });
 // 탭 닫힘 정리
 chrome.tabs.onRemoved.addListener((tabId) => {
+  if (isReadyAiPassiveDuplicateBackground()) return;
   clearCustomTabTitleForTab(tabId);
   delete tabMetaCache[tabId];
   delete actionStateCache[tabId];
@@ -2497,6 +2586,7 @@ function isMonitoredUrl(url) {
   }
 }
 function purgeDisabledTabs() {
+  if (isReadyAiPassiveDuplicateBackground()) return;
   chrome.tabs.query({}, (tabs) => {
     let removedOrange = false;
     let removedAny = false;
@@ -2520,6 +2610,7 @@ function purgeDisabledTabs() {
   });
 }
 async function kickActiveChatGptTabs(reason) {
+  if (isReadyAiPassiveDuplicateBackground()) return;
   getSiteConfig(async () => {
     const tabs = await pTabsQuery({ active: true });
     let seeded = false;

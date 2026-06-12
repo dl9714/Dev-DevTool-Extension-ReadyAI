@@ -20,10 +20,20 @@ Do not bump the `readyAiContentVersion` handshake string for ordinary content ch
 
 ## Injection Rules
 
-The extension must not declare default `content_scripts` in `manifest.json`.
-The background service worker manually injects content scripts only for the
-active ChatGPT tab, queued ChatGPT tabs, or an explicit popup target tab.
-For ChatGPT, injection must stay top-frame-only.
+The extension must not declare the full split content scripts as default
+`content_scripts` in `manifest.json`.
+
+The only allowed declarative content script is
+`src/content/chatgpt-bootstrap.js`, matched to ChatGPT top frames only. It is a
+tiny wake-up shim: it sends `ensure_content_for_current_chatgpt_tab` from the
+current ChatGPT tab, then the background injects the full split files into that
+same top frame. Do not add `all_frames`, `match_about_blank`, non-ChatGPT
+matches, or the full `part-*.js` files to the manifest.
+
+The background service worker manually injects the full content scripts only
+for the current ChatGPT tab that requested bootstrap, active ChatGPT tabs,
+queued ChatGPT tabs, or an explicit popup target tab. For ChatGPT, full
+injection must stay top-frame-only.
 
 When a top-level ChatGPT URL loads, the background must ensure the content script even if the tab-active cache is stale. Chrome can emit URL/status events before this extension's active-tab metadata catches up, which otherwise makes newly opened ChatGPT tabs miss the follow-up launcher. This is safe only because ChatGPT injection remains top-frame-only and `readyAiContentVersion` stays stable.
 

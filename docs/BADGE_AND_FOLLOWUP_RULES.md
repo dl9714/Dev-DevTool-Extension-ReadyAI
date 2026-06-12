@@ -11,6 +11,8 @@ If both are enabled, each extension has its own isolated content world and backg
 
 Do not remove the page-level ownership guard in the content script. Duplicate Ready_Ai instances must yield before creating `#ready-ai-steering-host`, before running heavy status checks, and before processing follow-up queue messages.
 
+Do not remove the background passive-duplicate guard. On this PC the legacy mirror id `ajnolilmicdilijebljgchoodgajnfeg` must not run tab injection, queue probe, Gemini probe, or ChatGPT bootstrap handling while the canonical id `deojggohikpfbhgdjbdogmkdgpkcighm` exists. Otherwise two service workers can race on the same ChatGPT tabs even when the page-level UI guard works.
+
 Do not bump `READY_AI_CONTENT_VERSION` just to mark a build. That string is the background/content compatibility handshake. Bumping it while Chrome still has an older service worker alive causes repeated `chrome.scripting.executeScript` reinjection and can make multiple ChatGPT tabs freeze. Use `READY_AI_CONTENT_BUILD_VERSION` for build identity instead.
 
 이 문서는 배지 상태 규칙과 후속 지시 규칙을 고정하기 위한 기준 문서다.
@@ -71,7 +73,7 @@ Do not bump `READY_AI_CONTENT_VERSION` just to mark a build. That string is the 
 4. 큐가 없는 평상시에는 후속 지시 probe alarm을 꺼두어야 한다.
 5. 여러 ChatGPT 탭이 열려 있어도 probe는 큐가 있는 탭 ID 중 한 번에 소수 탭만 순환 처리해야 한다. 모든 Chrome 탭이나 모든 iframe을 동시에 깨우는 방식으로 되돌리면 안 된다.
 6. 새 채팅 분산 전송처럼 명시적으로 필요한 경우를 제외하고 ChatGPT content script를 all frames로 강제 재주입하면 안 된다.
-7. `manifest.json`에는 기본 `content_scripts` 자동 주입을 두지 않는다. content script는 background가 활성 ChatGPT 탭 또는 큐가 있는 ChatGPT 탭에만 수동 주입한다.
+7. `manifest.json`에는 full content script 자동 주입을 두지 않는다. 허용되는 자동 주입은 ChatGPT top frame 전용 `src/content/chatgpt-bootstrap.js`뿐이며, 실제 content script는 background가 요청한 ChatGPT 탭 하나, 활성 ChatGPT 탭, 또는 큐가 있는 ChatGPT 탭에만 수동 주입한다.
 8. service worker 시작 시 전체 탭을 훑어서 content script를 주입하는 `kickAllTabs`류 동작을 넣으면 안 된다. 시작/설치/초기화 시에는 활성 ChatGPT 탭만 가볍게 확인한다.
 9. 큐도 없고 생성 중도 아닌 숨김 ChatGPT 탭은 짧은 주기 polling/keepalive 대상이 아니다. hidden idle 상태는 긴 주기로 유지한다.
 10. 활성 ChatGPT 탭 주입은 사이트 설정 캐시가 늦게 로드되어도 동작해야 한다. ChatGPT 기본 URL은 fallback site로 처리한다.
@@ -94,7 +96,7 @@ Do not bump `READY_AI_CONTENT_VERSION` just to mark a build. That string is the 
 - ChatGPT 후속 지시 감시를 top frame이 아닌 iframe/전체 프레임 기준으로 넓히는 것
 - 큐가 없는 ChatGPT 탭이나 일반 Chrome 탭까지 후속 지시 probe 대상으로 포함하는 것
 - `manifest.json`의 content script를 다시 `all_frames: true` 또는 `match_about_blank: true`로 되돌리는 것
-- `manifest.json`에 ChatGPT 자동 주입용 `content_scripts` 블록을 다시 추가하는 것
+- `manifest.json`에 ChatGPT full content script 자동 주입용 `content_scripts` 블록을 다시 추가하는 것 (`src/content/chatgpt-bootstrap.js` top-frame shim만 예외)
 - service worker 시작 때 모든 탭을 순회하며 content script를 주입하는 것
 - popup 복구 경로를 이유로 전체 Chrome 탭 또는 모든 ChatGPT 탭을 주기적으로 순회하는 것
 - background probe에서 `process_steering_queue_now`에 `forceResume`을 붙여 후속 대기를 강제로 깨는 것

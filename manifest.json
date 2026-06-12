@@ -1,11 +1,24 @@
 {
   "manifest_version": 3,
   "name": "Ready_Ai",
-  "version": "0.2.33",
+  "version": "0.2.34",
   "description": "AI 답변 완료 알림, 탭 이름 관리, 후속 지시 성능 업그레이드",
   "background": {
     "service_worker": "src/background.js"
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "src/content/chatgpt-bootstrap.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
   "action": {
     "default_popup": "src/popup.html",
     "default_icon": {
