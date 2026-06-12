@@ -548,7 +548,7 @@ function bindChatGptLightTitleBadgeTriggers() {
 var STEERING_AUTO_SEND_DELAY_MS = 1000;
 var STEERING_TURN_WATCHDOG_VISIBLE_MS = 12000;
 var STEERING_TURN_WATCHDOG_HIDDEN_MS = 20000;
-var READY_AI_CONTENT_VERSION = '2026-06-12.9-queue-drag-reorder';
+var READY_AI_CONTENT_VERSION = '2026-06-12.10-resume-stale-queue';
 try {
   var existingSteeringHost = document.getElementById('ready-ai-steering-host');
   if (existingSteeringHost) existingSteeringHost.remove();

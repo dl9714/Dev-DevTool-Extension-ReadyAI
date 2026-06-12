@@ -383,7 +383,10 @@ function scheduleSteeringQueueProcessing(delay = STEERING_AUTO_SEND_DELAY_MS) {
   clearSteeringAutoSendTimer();
   if (!monitoring || !steeringEnabled) return;
   if (!steeringQueue.length) return;
-  if (!canAutoSendSteeringNow()) return;
+  if (!canAutoSendSteeringNow()) {
+    if (isSteeringTurnWatchdogMature()) recoverStaleSteeringTurnWait('schedule_queue');
+    return;
+  }
   steeringAutoSendTimer = setTimeout(() => {
     steeringAutoSendTimer = null;
     processSteeringQueue({ source: 'auto' });

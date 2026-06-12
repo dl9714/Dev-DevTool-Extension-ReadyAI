@@ -20,7 +20,20 @@ function bindHandlersOnce() {
   document.addEventListener('keydown', markTypingAcknowledged, true);
   document.addEventListener('input', markTypingAcknowledged, true);
   // 탭 활성/비활성 전환 시에도 상태 재평가(백그라운드 완료 감지 보강)
-  document.addEventListener('visibilitychange', () => { ensurePolling(true); armTitleBadgeStabilityWindow(1800); scheduleCheck(true); });
+  document.addEventListener('visibilitychange', () => {
+    ensurePolling(true);
+    armTitleBadgeStabilityWindow(1800);
+    scheduleCheck(true);
+    wakeSteeringQueueAfterVisibilityRestore('visibility');
+  });
+  window.addEventListener('focus', () => {
+    scheduleCheck(true);
+    wakeSteeringQueueAfterVisibilityRestore('focus');
+  });
+  window.addEventListener('pageshow', () => {
+    scheduleCheck(true);
+    wakeSteeringQueueAfterVisibilityRestore('pageshow');
+  });
 }
 // shadow DOM deep-scan / deep-observe는 Gemini 완료 감지 보강용이 핵심이라
 // 기본은 Gemini에서만 켠다.
@@ -364,7 +377,7 @@ try {
     }
     if (msg.action === 'process_steering_queue_now') {
       if (msg.forceResume) {
-        Promise.resolve(resumeSteeringQueueNow({ source: 'message' }))
+        Promise.resolve(resumeSteeringQueueNow({ source: 'message', force: true }))
           .then((ok) => {
             try { sendResponse?.({ ok: !!ok, count: steeringQueue.length }); } catch (_) {}
           })

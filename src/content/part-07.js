@@ -396,6 +396,7 @@ async function processSteeringQueue(options = {}) {
 }
 async function resumeSteeringQueueNow(options = {}) {
   if (!monitoring || !steeringEnabled) return false;
+  const forceResume = !!options.force || options.source === 'resume_button';
   if (!steeringQueue.length) {
     setSteeringStatus('전송할 대기열이 없습니다.', true);
     updateSteeringUi();
@@ -423,14 +424,14 @@ async function resumeSteeringQueueNow(options = {}) {
     updateSteeringUi();
     return false;
   }
-  if (steeringAwaitingResponseStart && !isSteeringTurnWatchdogMature()) {
+  if (!forceResume && steeringAwaitingResponseStart && !isSteeringTurnWatchdogMature()) {
     if (!steeringTurnCompletionWatchdogStartedAt) armSteeringTurnCompletionWatchdog(getSteeringTurnWatchdogDelayMs());
     scheduleCheck(true);
     setSteeringStatus('방금 보낸 답변 시작을 확인 중입니다.');
     updateSteeringUi();
     return false;
   }
-  if (holdChatGptUnobservedSteeringTurn('resume')) return false;
+  if (!forceResume && holdChatGptUnobservedSteeringTurn('resume')) return false;
   clearSteeringAutoSendTimer();
   clearSteeringSendLock();
   clearSteeringAwaitingResponseStart();

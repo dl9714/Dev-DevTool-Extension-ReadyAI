@@ -173,8 +173,12 @@ function isChatGptUnobservedSteeringTurnPending() {
     && !steeringObservedGenerationSinceSend
   );
 }
+function isForcedSteeringResumeReason(reason = '') {
+  return /resume|force/i.test(String(reason || ''));
+}
 function holdChatGptUnobservedSteeringTurn(reason = '') {
   if (!isChatGptUnobservedSteeringTurnPending()) return false;
+  if (isForcedSteeringResumeReason(reason) || isSteeringTurnWatchdogMature()) return false;
   clearSteeringAutoSendTimer();
   completionStatus = 'idle';
   if (!steeringTurnCompletionWatchdogTimer) {
@@ -258,6 +262,16 @@ function hasActiveSteeringOffer() {
 function canAutoSendSteeringNow() {
   if (isChatGptUnobservedSteeringTurnPending()) return false;
   return hasActiveSteeringOffer() && !steeringSendLock && !steeringProcessing && !steeringAwaitingResponseStart && !steeringAwaitingTurnCompletion;
+}
+function wakeSteeringQueueAfterVisibilityRestore(reason = 'visibility') {
+  if (!monitoring || !steeringEnabled || !steeringQueue.length || steeringProcessing) return false;
+  if (!canAutoSendSteeringNow()) {
+    if (!isSteeringTurnWatchdogMature()) return false;
+    recoverStaleSteeringTurnWait(reason);
+    return true;
+  }
+  scheduleSteeringQueueProcessing(0);
+  return true;
 }
 function isSteeringFollowupWaiting() {
   return !!(
