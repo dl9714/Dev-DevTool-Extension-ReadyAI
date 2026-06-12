@@ -244,7 +244,7 @@ function isSteeringQueueBlocked() {
   return true;
 }
 function getSteeringResumeLabel() {
-  return isSteeringQueueBlocked() ? '즉시 재개' : '다음 전송';
+  return '즉시 재개';
 }
 function clearSteeringCompletionOffer() {
   if (completionStatus === 'completed') {

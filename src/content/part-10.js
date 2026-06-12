@@ -108,7 +108,7 @@ var STEERING_UI_MARKUP_TEMPLATE = `
         <div class="queue-head">
           <div class="queue-label">대기 목록</div>
           <div class="queue-head-actions">
-            <button class="queue-head-btn" type="button" id="ready-ai-steering-run-next">다음 전송</button>
+            <button class="queue-head-btn" type="button" id="ready-ai-steering-run-next">즉시 재개</button>
             <button class="queue-head-btn danger" type="button" id="ready-ai-steering-clear-queue">모두 삭제</button>
           </div>
         </div>
