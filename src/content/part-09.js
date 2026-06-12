@@ -174,12 +174,11 @@ var STEERING_UI_STYLE_TEMPLATE_B = `
       }
       .card[data-advanced="true"] {
         width: min(430px, calc(100vw - 28px));
-        max-height: var(--ready-ai-card-max-height, min(760px, calc(100vh - 32px)));
-        overflow-y: auto;
-        padding-bottom: 16px;
+        overflow: visible;
+        padding-bottom: 14px;
       }
       .card[data-advanced="true"] .input {
-        min-height: 132px;
+        min-height: 112px;
       }
       .advanced-card {
         margin-top: 10px;
@@ -374,7 +373,7 @@ var STEERING_UI_STYLE_TEMPLATE_B = `
 }
 .status {
         min-height: 16px;
-        margin-top: 8px;
+        margin-top: 6px;
         font-size: 11px;
         line-height: 1.4;
         color: #94a3b8;
@@ -388,11 +387,11 @@ var STEERING_UI_STYLE_TEMPLATE_B = `
       .attachment-wrap {
         display: none;
         flex-direction: column;
-        gap: 8px;
-        margin-top: 10px;
+        gap: 6px;
+        margin-top: 8px;
         border: 1px dashed rgba(148, 163, 184, 0.28);
         border-radius: 14px;
-        padding: 10px;
+        padding: 8px;
         background: rgba(255, 255, 255, 0.03);
       }
       .attachment-wrap.dragging {
@@ -407,10 +406,12 @@ var STEERING_UI_STYLE_TEMPLATE_B = `
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 8px;
+        gap: 6px;
       }
       .attachment-meta-line {
-        font-size: 11px;
+        min-width: 0;
+        flex: 1 1 auto;
+        font-size: 10.5px;
         color: #94a3b8;
       }
       .dock[data-theme="light"] .attachment-meta-line {
@@ -418,29 +419,36 @@ var STEERING_UI_STYLE_TEMPLATE_B = `
       }
       .attachment-dropzone {
         display: flex;
-        min-height: 38px;
-        flex-direction: column;
+        width: 100%;
+        min-height: 30px;
+        box-sizing: border-box;
+        flex-direction: row;
         align-items: center;
-        justify-content: center;
-        gap: 1px;
+        justify-content: flex-start;
+        gap: 8px;
         border-radius: 10px;
         border: 1px dashed rgba(129, 140, 248, 0.44);
         background: rgba(99, 102, 241, 0.08);
-        padding: 5px 8px;
-        text-align: center;
+        padding: 4px 8px;
+        text-align: left;
         color: #e0e7ff;
       }
       .attachment-dropzone[hidden] {
         display: none;
       }
       .attachment-dropzone strong {
+        flex: 0 0 auto;
         font-size: 10.5px;
         line-height: 1.25;
+        white-space: nowrap;
       }
       .attachment-dropzone span {
-        max-width: 260px;
-        font-size: 9px;
+        margin-left: auto;
+        flex: 0 0 auto;
+        max-width: none;
+        font-size: 9.5px;
         line-height: 1.25;
+        white-space: nowrap;
         color: #a5b4fc;
       }
       .dock[data-theme="light"] .attachment-dropzone {
@@ -461,14 +469,15 @@ var STEERING_UI_STYLE_TEMPLATE_B = `
       .attachment-actions {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 5px;
+        flex: 0 0 auto;
       }
       .attachment-btn {
         border: 1px solid rgba(148, 163, 184, 0.22);
         border-radius: 999px;
         background: rgba(255, 255, 255, 0.05);
         color: #e2e8f0;
-        padding: 5px 9px;
+        padding: 4px 8px;
         font-size: 10px;
         font-weight: 700;
         cursor: pointer;

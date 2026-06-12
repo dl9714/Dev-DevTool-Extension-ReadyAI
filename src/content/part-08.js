@@ -110,14 +110,14 @@ var STEERING_UI_STYLE_TEMPLATE_A = `
       .card {
         position: relative;
         width: min(400px, calc(100vw - 28px));
-        max-height: var(--ready-ai-card-max-height, min(560px, calc(100vh - 220px)));
-        overflow-y: auto;
+        box-sizing: border-box;
+        overflow: visible;
         border-radius: 18px;
         border: 1px solid rgba(71, 85, 105, 0.42);
         background: rgba(17, 24, 39, 0.98);
         box-shadow: 0 18px 50px rgba(2, 6, 23, 0.45);
         backdrop-filter: blur(14px);
-        padding: 14px;
+        padding: 12px;
         color: #e5e7eb;
       }
       .drop-shield {
@@ -192,17 +192,17 @@ var STEERING_UI_STYLE_TEMPLATE_A = `
       }
       .input {
         width: 100%;
-        min-height: 72px;
+        min-height: 62px;
         resize: vertical;
         border: 1px solid rgba(148, 163, 184, 0.35);
         border-radius: 14px;
-        padding: 10px 12px;
+        padding: 8px 10px;
         font-size: 12px;
-        line-height: 1.5;
+        line-height: 1.45;
         outline: none;
         background: rgba(2, 6, 23, 0.36);
         color: #f8fafc;
-        margin-top: 10px;
+        margin-top: 8px;
       }
       .dock[data-theme="light"] .input {
         background: rgba(248, 250, 252, 0.95);

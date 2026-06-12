@@ -53,7 +53,7 @@ var STEERING_UI_MARKUP_TEMPLATE = `
           <input class="file-input" id="ready-ai-steering-image-file" type="file" multiple />
           <div class="attachment-dropzone" id="ready-ai-steering-attachment-dropzone">
             <strong>파일을 여기로 드롭</strong>
-            <span>폴더 드롭 지원</span>
+            <span>(폴더 드롭 지원)</span>
           </div>
           <div class="attachment-list" id="ready-ai-steering-attachment-list"></div>
           <div class="attachment-hint" id="ready-ai-steering-attachment-hint"></div>
