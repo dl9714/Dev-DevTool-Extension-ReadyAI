@@ -66,7 +66,7 @@ const CHATGPT_NEW_CHAT_TAB_GAP_MS = 7_000;
 const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
-const READY_AI_CONTENT_VERSION = '2026-06-12.13-lazy-chatgpt-injection';
+const READY_AI_CONTENT_VERSION = '2026-06-12.14-manual-chatgpt-injection';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
 const TITLE_GUARD_MAIN_FILE = 'src/content/title-guard-main.js';
 const CONTENT_SCRIPT_FILES = Object.freeze([
@@ -753,6 +753,17 @@ function isChatGptUrl(url) {
   } catch (_) {
     return false;
   }
+}
+function getTabSteeringQueueCount(tabId) {
+  return Math.max(0, Number(tabStates?.[tabId]?.steeringQueueCount) || 0);
+}
+function shouldEnsureContentForTabEvent(tab) {
+  if (!tab?.id || !isMonitoredUrl(tab.url || '')) return false;
+  if (!isChatGptUrl(tab.url || '')) return true;
+  if (tab.active) return true;
+  if (getTabSteeringQueueCount(tab.id) > 0) return true;
+  if (tabStates?.[tab.id]?.status === 'ORANGE') return true;
+  return false;
 }
 function getChatGptNewChatUrl(sourceUrl) {
   try {
@@ -2364,7 +2375,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     && !titleHasReadyAiPrefix(changeInfo.title || tab?.title || '');
   if (changeInfo.status === 'complete' || changeInfo.url || titleChangedWithoutBadge) {
     const candidate = { ...prevMeta, ...(tab || {}), id: tabId, url: nextUrl };
-    if (isMonitoredUrl(candidate.url || '')) {
+    if (shouldEnsureContentForTabEvent(candidate)) {
       safeActionCall((async () => {
         const ready = await ensureContentScripts(candidate);
         if (!ready) return;
@@ -2391,7 +2402,7 @@ chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
   bumpDashboardVersion();
   safeActionCall((async () => {
     const tab = await pTabsGet(tabId);
-    if (!tab?.id || !isMonitoredUrl(tab.url || '')) return;
+    if (!shouldEnsureContentForTabEvent(tab)) return;
     const ready = await ensureContentScripts(tab);
     if (ready) await pTabsSendMessage(
       tabId,

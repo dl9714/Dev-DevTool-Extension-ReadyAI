@@ -58,7 +58,7 @@
 4. 큐가 없는 평상시에는 후속 지시 probe alarm을 꺼두어야 한다.
 5. 여러 ChatGPT 탭이 열려 있어도 probe는 한 번에 소수 탭만 순환 처리해야 한다. 모든 Chrome 탭이나 모든 iframe을 동시에 깨우는 방식으로 되돌리면 안 된다.
 6. 새 채팅 분산 전송처럼 명시적으로 필요한 경우를 제외하고 ChatGPT content script를 all frames로 강제 재주입하면 안 된다.
-7. `manifest.json`의 기본 content script는 `all_frames: false`, `match_about_blank: false`를 유지해야 한다.
+7. `manifest.json`에는 기본 `content_scripts` 자동 주입을 두지 않는다. content script는 background가 활성 ChatGPT 탭 또는 큐가 있는 ChatGPT 탭에만 수동 주입한다.
 8. service worker 시작 시 전체 탭을 훑어서 content script를 주입하는 `kickAllTabs`류 동작을 넣으면 안 된다. 시작/설치 시에는 활성 ChatGPT 탭만 가볍게 확인한다.
 9. 큐도 없고 생성 중도 아닌 숨김 ChatGPT 탭은 짧은 주기 polling/keepalive 대상이 아니다. hidden idle 상태는 긴 주기로 유지한다.
 
@@ -76,6 +76,7 @@
 - ChatGPT 후속 지시 감시를 top frame이 아닌 iframe/전체 프레임 기준으로 넓히는 것
 - 큐가 없는 ChatGPT 탭이나 일반 Chrome 탭까지 후속 지시 probe 대상으로 포함하는 것
 - `manifest.json`의 content script를 다시 `all_frames: true` 또는 `match_about_blank: true`로 되돌리는 것
+- `manifest.json`에 ChatGPT 자동 주입용 `content_scripts` 블록을 다시 추가하는 것
 - service worker 시작 때 모든 탭을 순회하며 content script를 주입하는 것
 
 ## 4. 후속 지시 고급설정
