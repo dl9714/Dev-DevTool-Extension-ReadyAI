@@ -66,7 +66,7 @@ const CHATGPT_NEW_CHAT_TAB_GAP_MS = 7_000;
 const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
-const READY_AI_CONTENT_VERSION = '2026-06-12.17-popup-active-ensure';
+const READY_AI_CONTENT_VERSION = '2026-06-12.18-auto-probe-no-force';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
 const TITLE_GUARD_MAIN_FILE = 'src/content/title-guard-main.js';
 const CONTENT_SCRIPT_FILES = Object.freeze([
@@ -1898,7 +1898,7 @@ async function tickSteeringQueueProbe() {
       if (!tab || !isChatGptUrl(tab.url || '')) continue;
       await ensureContentScripts(tab, { allFrames: false, topFrameOnly: true, frameId: 0 });
       await pTabsSendMessage(tabId, { action: 'force_check', reason: 'steering_queue_probe', topFrameOnly: true }, { frameId: 0 });
-      await pTabsSendMessage(tabId, { action: 'process_steering_queue_now', reason: 'steering_queue_probe', forceResume: true, topFrameOnly: true }, { frameId: 0 });
+      await pTabsSendMessage(tabId, { action: 'process_steering_queue_now', reason: 'steering_queue_probe', topFrameOnly: true }, { frameId: 0 });
     }
   } finally {
     steeringQueueProbeInFlight = false;

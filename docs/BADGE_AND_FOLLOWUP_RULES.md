@@ -63,6 +63,7 @@
 9. 큐도 없고 생성 중도 아닌 숨김 ChatGPT 탭은 짧은 주기 polling/keepalive 대상이 아니다. hidden idle 상태는 긴 주기로 유지한다.
 10. 활성 ChatGPT 탭 주입은 사이트 설정 캐시가 늦게 로드되어도 동작해야 한다. ChatGPT 기본 URL은 fallback site로 처리한다.
 11. popup 열기 또는 popup에서 후속 지시 전송/삭제를 누른 경우에는 background가 해당 대상 탭 하나만 content script 주입 보장할 수 있다. ChatGPT 대상은 항상 top frame만 확인한다.
+12. background 후속 지시 probe는 대기열 확인과 정상 처리 요청만 해야 하며 `forceResume`을 보내면 안 된다. 강제 재개는 사용자가 `즉시 재개`를 직접 누른 경우에만 허용한다.
 
 ## 3. 변경 금지 범위
 
@@ -81,6 +82,7 @@
 - `manifest.json`에 ChatGPT 자동 주입용 `content_scripts` 블록을 다시 추가하는 것
 - service worker 시작 때 모든 탭을 순회하며 content script를 주입하는 것
 - popup 복구 경로를 이유로 전체 Chrome 탭 또는 모든 ChatGPT 탭을 주기적으로 순회하는 것
+- background probe에서 `process_steering_queue_now`에 `forceResume`을 붙여 후속 대기를 강제로 깨는 것
 
 ## 4. 후속 지시 고급설정
 
