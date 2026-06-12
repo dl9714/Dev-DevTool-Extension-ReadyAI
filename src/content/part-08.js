@@ -342,14 +342,25 @@ var STEERING_UI_STYLE_TEMPLATE_A = `
         border: 1px solid rgba(148, 163, 184, 0.2);
         background: rgba(255, 255, 255, 0.04);
         padding: 8px 10px;
+        transition: border-color 120ms ease, background 120ms ease, opacity 120ms ease, transform 120ms ease;
       }
       .queue-item.editing {
         align-items: start;
         border-color: rgba(99, 102, 241, 0.34);
         background: rgba(99, 102, 241, 0.08);
       }
+      .queue-item.dragging {
+        border-color: rgba(34, 197, 94, 0.6);
+        background: rgba(34, 197, 94, 0.1);
+        opacity: 0.86;
+        transform: scale(0.995);
+      }
       .dock[data-theme="light"] .queue-item {
         background: rgba(248, 250, 252, 0.95);
+      }
+      .dock[data-theme="light"] .queue-item.dragging {
+        border-color: rgba(22, 163, 74, 0.42);
+        background: rgba(220, 252, 231, 0.96);
       }
       .queue-order {
         display: inline-flex;
@@ -362,6 +373,17 @@ var STEERING_UI_STYLE_TEMPLATE_A = `
         font-weight: 800;
         background: rgba(34, 197, 94, 0.16);
         color: #bbf7d0;
+        cursor: grab;
+        user-select: none;
+        touch-action: none;
+      }
+      .queue-order:active,
+      .queue-item.dragging .queue-order {
+        cursor: grabbing;
+      }
+      .queue-item.editing .queue-order {
+        cursor: default;
+        opacity: 0.68;
       }
       .dock[data-theme="light"] .queue-order {
         color: #166534;

@@ -136,6 +136,7 @@ function renderSteeringQueue() {
     open: !!steeringPanelOpen,
     editingId: steeringQueueEditingId,
     editingText: steeringQueueEditingId == null ? '' : String(steeringQueueEditingText || ''),
+    draggingId: steeringQueueDragState?.itemId || null,
     queue: steeringQueue.map((item) => [item?.id, String(item?.text || '').trim(), getSteeringItemAttachmentCount(item)]),
   });
   steeringRefs.queueWrap.style.display = nextDisplay;
@@ -154,10 +155,19 @@ function renderSteeringQueue() {
     });
     const isEditing = item?.id === steeringQueueEditingId;
     if (isEditing) row.classList.add('editing');
+    if (steeringQueueDragState?.itemId === item?.id) row.classList.add('dragging');
     row.setAttribute('data-queue-id', String(item?.id || ''));
+    row.setAttribute('data-queue-index', String(index));
     const order = document.createElement('span');
     order.className = 'queue-order';
     order.textContent = String(index + 1);
+    order.title = isEditing ? '수정 중에는 드래그할 수 없습니다.' : '드래그해서 순서 변경';
+    order.setAttribute('aria-label', `${index + 1}번 대기, 드래그해서 순서 변경`);
+    if (!isEditing) {
+      order.addEventListener('pointerdown', (event) => {
+        beginSteeringQueueDrag(event, item.id);
+      });
+    }
     const body = document.createElement('div');
     body.className = 'queue-body';
     const textEl = document.createElement('div');
@@ -269,16 +279,103 @@ function clearSteeringQueue(showStatus = true) {
   if (showStatus) setSteeringStatus('대기를 모두 비웠습니다.');
   updateSteeringUi();
 }
-function moveSteeringQueueItem(itemId, direction) {
+function getSteeringQueueItemIndex(itemId) {
+  return steeringQueue.findIndex((item) => item?.id === itemId);
+}
+function moveSteeringQueueItemToIndex(itemId, nextIndex, options = {}) {
   const index = steeringQueue.findIndex((item) => item?.id === itemId);
   if (index < 0) return false;
-  const nextIndex = index + direction;
-  if (nextIndex < 0 || nextIndex >= steeringQueue.length) return false;
+  const targetIndex = Number(nextIndex);
+  if (!Number.isFinite(targetIndex)) return false;
+  const boundedIndex = Math.max(0, Math.min(steeringQueue.length - 1, targetIndex));
+  if (boundedIndex === index) return false;
   const list = steeringQueue.slice();
   const [picked] = list.splice(index, 1);
-  list.splice(nextIndex, 0, picked);
+  list.splice(boundedIndex, 0, picked);
   steeringQueue = list;
   syncSteeringQueueEditState();
+  if (!options.silentStatus) setSteeringStatus('대기 순서를 변경했습니다.');
+  if (options.render !== false) updateSteeringUi();
+  return true;
+}
+function moveSteeringQueueItem(itemId, direction) {
+  const index = getSteeringQueueItemIndex(itemId);
+  if (index < 0) return false;
+  return moveSteeringQueueItemToIndex(itemId, index + Number(direction || 0));
+}
+function setSteeringQueueDragListeners(enabled) {
+  try {
+    const method = enabled ? 'addEventListener' : 'removeEventListener';
+    window[method]('pointermove', handleSteeringQueueDragMove, true);
+    window[method]('pointerup', finishSteeringQueueDrag, true);
+    window[method]('pointercancel', finishSteeringQueueDrag, true);
+  } catch (_) {}
+}
+function getSteeringQueueDragTargetIndex(clientY, sourceIndex) {
+  if (!Number.isFinite(clientY) || !Number.isFinite(sourceIndex)) return -1;
+  const rows = Array.from(steeringRefs?.queue?.querySelectorAll?.('.queue-item') || []);
+  if (!rows.length) return -1;
+  let lastIndex = -1;
+  for (const row of rows) {
+    const rowIndex = Number(row.getAttribute('data-queue-index'));
+    if (!Number.isFinite(rowIndex)) continue;
+    lastIndex = rowIndex;
+    const rect = row.getBoundingClientRect();
+    if (clientY < rect.top + (rect.height / 2)) return rowIndex > sourceIndex ? rowIndex - 1 : rowIndex;
+  }
+  return lastIndex;
+}
+function beginSteeringQueueDrag(event, itemId) {
+  if (steeringQueueEditingId === itemId) return false;
+  if (getSteeringQueueItemIndex(itemId) < 0) return false;
+  try { event.preventDefault(); } catch (_) {}
+  try { event.stopPropagation(); } catch (_) {}
+  if (steeringQueueDragState) finishSteeringQueueDrag();
+  steeringQueueDragState = {
+    itemId,
+    pointerId: event?.pointerId,
+    moved: false,
+  };
+  try {
+    steeringQueueDragPreviousUserSelect = document.body?.style?.userSelect || '';
+    if (document.body?.style) document.body.style.userSelect = 'none';
+  } catch (_) {}
+  try { event.currentTarget?.setPointerCapture?.(event.pointerId); } catch (_) {}
+  setSteeringQueueDragListeners(true);
+  updateSteeringUi();
+  return true;
+}
+function handleSteeringQueueDragMove(event) {
+  const state = steeringQueueDragState;
+  if (!state) return;
+  if (state.pointerId != null && event?.pointerId != null && event.pointerId !== state.pointerId) return;
+  try { event.preventDefault(); } catch (_) {}
+  try { event.stopPropagation(); } catch (_) {}
+  const currentIndex = getSteeringQueueItemIndex(state.itemId);
+  if (currentIndex < 0) {
+    finishSteeringQueueDrag(event);
+    return;
+  }
+  const targetIndex = getSteeringQueueDragTargetIndex(Number(event?.clientY), currentIndex);
+  if (targetIndex < 0) return;
+  if (targetIndex === currentIndex) return;
+  state.moved = true;
+  moveSteeringQueueItemToIndex(state.itemId, targetIndex, { silentStatus: true });
+}
+function finishSteeringQueueDrag(event) {
+  const state = steeringQueueDragState;
+  if (!state) return false;
+  if (event && state.pointerId != null && event?.pointerId != null && event.pointerId !== state.pointerId) return false;
+  try { event?.preventDefault?.(); } catch (_) {}
+  try { event?.stopPropagation?.(); } catch (_) {}
+  const moved = !!state.moved;
+  steeringQueueDragState = null;
+  setSteeringQueueDragListeners(false);
+  try {
+    if (document.body?.style) document.body.style.userSelect = steeringQueueDragPreviousUserSelect || '';
+  } catch (_) {}
+  steeringQueueDragPreviousUserSelect = '';
+  if (moved) setSteeringStatus('대기 순서를 변경했습니다.');
   updateSteeringUi();
   return true;
 }
