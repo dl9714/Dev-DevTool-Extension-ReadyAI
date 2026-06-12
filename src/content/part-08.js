@@ -263,7 +263,7 @@ var STEERING_UI_STYLE_TEMPLATE_A = `
         display: none;
         flex-direction: column;
         width: min(400px, calc(100vw - 28px));
-        max-height: min(260px, 42vh);
+        max-height: min(210px, 32vh);
         border-radius: 16px;
         border: 1px solid rgba(71, 85, 105, 0.28);
         background: rgba(15, 23, 42, 0.94);
@@ -329,7 +329,7 @@ var STEERING_UI_STYLE_TEMPLATE_A = `
         display: flex;
         flex-direction: column;
         gap: 6px;
-        max-height: min(190px, 34vh);
+        max-height: min(140px, 24vh);
         overflow: auto;
         padding-right: 2px;
       }
