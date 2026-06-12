@@ -346,13 +346,20 @@ async function sendSteeringPromptTextWhenReady(text, options = {}) {
 async function processSteeringQueue(options = {}) {
   if (!monitoring || !steeringEnabled) return false;
   if (!steeringQueue.length) return false;
-  if (!canAutoSendSteeringNow()) return false;
+  if (steeringProcessing) return false;
+  const dispatchToken = acquireSteeringQueueDispatchLock(options.source || 'queue');
+  if (!dispatchToken) return false;
+  if (!canAutoSendSteeringNow()) {
+    releaseSteeringQueueDispatchLock(dispatchToken);
+    return false;
+  }
   const current = steeringQueue[0];
   if (!current?.text && !getSteeringItemAttachmentCount(current)) {
     current.retryCount = 0;
     steeringQueue = steeringQueue.slice(1);
     syncSteeringQueueEditState();
     updateSteeringUi();
+    releaseSteeringQueueDispatchLock(dispatchToken);
     return false;
   }
   steeringProcessing = true;
@@ -390,6 +397,7 @@ async function processSteeringQueue(options = {}) {
     updateSteeringUi();
     return true;
   } finally {
+    releaseSteeringQueueDispatchLock(dispatchToken);
     steeringProcessing = false;
     updateSteeringUi();
   }

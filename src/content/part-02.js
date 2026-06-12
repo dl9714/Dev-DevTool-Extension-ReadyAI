@@ -553,7 +553,21 @@ function bindChatGptLightTitleBadgeTriggers() {
 var STEERING_AUTO_SEND_DELAY_MS = 1000;
 var STEERING_TURN_WATCHDOG_VISIBLE_MS = 12000;
 var STEERING_TURN_WATCHDOG_HIDDEN_MS = 20000;
-var READY_AI_CONTENT_VERSION = '2026-06-12.19-chatgpt-panel-lift';
+var READY_AI_CONTENT_VERSION = '2026-06-12.21-single-queue-dispatch';
+try {
+  globalThis.__ReadyAiContentInstanceSeq = (Number(globalThis.__ReadyAiContentInstanceSeq) || 0) + 1;
+} catch (_) {}
+function getReadyAiContentInstanceSeq() {
+  try {
+    return Number(globalThis.__ReadyAiContentInstanceSeq) || 0;
+  } catch (_) {
+    return 0;
+  }
+}
+function isReadyAiCurrentContentInstance(instanceSeq) {
+  const current = getReadyAiContentInstanceSeq();
+  return !current || !instanceSeq || current === Number(instanceSeq);
+}
 try {
   var existingSteeringHost = document.getElementById('ready-ai-steering-host');
   if (existingSteeringHost) existingSteeringHost.remove();
@@ -634,6 +648,10 @@ var steeringAutoSendTimer = null;
 var steeringSendLock = false;
 var steeringSendLockTimer = null;
 var steeringProcessing = false;
+var steeringLastRuntimeEnqueueSignature = '';
+var steeringLastRuntimeEnqueueAt = 0;
+var STEERING_RUNTIME_ENQUEUE_DEDUPE_MS = 1200;
+var STEERING_QUEUE_DISPATCH_LOCK_MS = 45000;
 var STEERING_ATTACHMENT_LIMIT = 8;
 var STEERING_FILE_MAX_BYTES = 50 * 1024 * 1024;
 var STEERING_IMAGE_LIMIT = STEERING_ATTACHMENT_LIMIT; // 기존 내부 호출 호환용
