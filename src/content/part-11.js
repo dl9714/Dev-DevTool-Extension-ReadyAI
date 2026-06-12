@@ -74,11 +74,6 @@ function applySteeringUiNow() {
   setSteeringDisabledIfChanged(refs.newChatSend, steeringNewChatSendPending || !steeringAdvancedEnabled || !hasDraftText || hasDraftImages);
   setSteeringDisabledIfChanged(refs.sendNow, !steeringQueue.length && !hasDraftText && !hasDraftImages);
   setSteeringDisabledIfChanged(refs.clear, !steeringQueue.length && !hasDraftText && !hasDraftImages);
-  if (refs.resumeNow) {
-    setSteeringTextIfChanged(refs.resumeNow, '즉시 재개');
-    setSteeringDisabledIfChanged(refs.resumeNow, !steeringQueue.length);
-    setSteeringDisplayIfChanged(refs.resumeNow, isSteeringQueueBlocked() ? 'inline-flex' : 'none');
-  }
   if (refs.runNext) setSteeringTextIfChanged(refs.runNext, getSteeringResumeLabel());
   setSteeringDisabledIfChanged(refs.runNext, !steeringQueue.length);
   setSteeringDisabledIfChanged(refs.clearQueue, !steeringQueue.length);
