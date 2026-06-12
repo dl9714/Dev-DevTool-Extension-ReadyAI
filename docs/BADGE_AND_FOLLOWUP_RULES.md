@@ -65,6 +65,7 @@
 11. popup 열기 또는 popup에서 후속 지시 전송/삭제를 누른 경우에는 background가 해당 대상 탭 하나만 content script 주입 보장할 수 있다. ChatGPT 대상은 항상 top frame만 확인한다.
 12. background 후속 지시 probe는 대기열 확인과 정상 처리 요청만 해야 하며 `forceResume`을 보내면 안 된다. 강제 재개는 사용자가 `즉시 재개`를 직접 누른 경우에만 허용한다.
 13. 후속 지시 대기열 전송은 탭당 한 번에 하나만 실행되어야 한다. content script 재주입이나 runtime 메시지 중복으로 같은 문구가 동시에 두 번 enqueue/send되면 안 된다.
+14. popup/dashboard의 수동 강제 확인도 ChatGPT에서는 top frame만 확인해야 한다. 수동 버튼이라는 이유로 `allFrames: true`를 쓰면 안 된다.
 
 ## 3. 변경 금지 범위
 
@@ -85,6 +86,7 @@
 - popup 복구 경로를 이유로 전체 Chrome 탭 또는 모든 ChatGPT 탭을 주기적으로 순회하는 것
 - background probe에서 `process_steering_queue_now`에 `forceResume`을 붙여 후속 대기를 강제로 깨는 것
 - content script 재주입 시 기존 runtime listener가 같은 후속 지시를 다시 enqueue/send할 수 있게 두는 것
+- popup/dashboard 강제 확인에서 ChatGPT 프레임 전체를 깨우는 것
 
 ## 4. 후속 지시 고급설정
 

@@ -1709,7 +1709,12 @@ function renderDashboardData(data, cfg) {
           forceBtn.type = 'button';
           forceBtn.textContent = '강제 확인';
           forceBtn.addEventListener('click', async () => {
-            const res = await pSendTabMessage(item.tabId, { action: 'force_check', reason: 'popup_dashboard' }, { allFrames: true, topFrameOnly: false });
+            await ensureContentForTab(item.tabId, 'popup_dashboard_force_check');
+            const res = await pSendTabMessage(
+              item.tabId,
+              { action: 'force_check', reason: 'popup_dashboard', topFrameOnly: true },
+              { frameId: 0 }
+            );
             setHint(res?.ok ? '강제 확인 요청 전송' : '강제 확인 요청 실패', !res?.ok);
           });
           const sendBtn = document.createElement('button');
