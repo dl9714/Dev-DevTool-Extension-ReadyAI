@@ -18,6 +18,18 @@ const SOUND_PRESETS = Object.freeze({
   long: 'long',
   custom: 'custom',
 });
+const POPUP_FAVORITE_ITEMS = Object.freeze({
+  alerts: { title: '완료 알림', icon: 'bell.svg', toggle: 'alerts', sheet: 'alerts-sheet' },
+  steering: { title: '후속 지시', icon: 'message.svg', toggle: 'steering', sheet: 'steering-sheet' },
+  dnd: { title: '방해 금지', icon: 'shield-off.svg', toggle: 'dnd', sheet: 'alerts-sheet', anchor: 'alerts-dnd-section' },
+  sites: { title: '사이트', icon: 'window.svg', sheet: 'builtin-sites-sheet' },
+  templates: { title: '후속 지시 템플릿', icon: 'message.svg', sheet: 'steering-sheet', anchor: 'steering-templates-section' },
+  titles: { title: '탭 이름과 현황', icon: 'window.svg', sheet: 'title-manager-sheet' },
+  advanced: { title: '고급 설정', icon: 'settings.svg', sheet: 'advanced-sheet' },
+  utilities: { title: '백업과 이력', icon: 'shield-off.svg', sheet: 'advanced-sheet', anchor: 'advanced-data-tools-section' },
+  gemini: { title: 'Gemini 감지', icon: 'bell.svg', sheet: 'builtin-sites-sheet', anchor: 'site-gemini-section' },
+});
+const DEFAULT_POPUP_FAVORITES = Object.freeze(['alerts', 'steering', 'dnd']);
 const MAX_CUSTOM_SOUND_FILE_BYTES = 1024 * 1024 * 2;
 const MAX_TEMPLATE_COUNT = 20;
 const MAX_TEMPLATE_NAME_LENGTH = 24;
@@ -37,6 +49,7 @@ let lastHistorySignature = '';
 let lastDashboardVersionSeen = 0;
 let lastDashboardFetchedAt = 0;
 let lastTitleManagerListSignature = '';
+let lastFavoritesRenderSignature = '';
 const DASHBOARD_META_FORCE_REFRESH_MS = 30000;
 let dashboardView = {
   filter: 'ALL',
@@ -82,6 +95,18 @@ function clampNumber(v, fallback, min, max) {
   if (typeof min === 'number' && out < min) return min;
   if (typeof max === 'number' && out > max) return max;
   return out;
+}
+function normalizePopupFavorites(value) {
+  const input = Array.isArray(value) ? value : DEFAULT_POPUP_FAVORITES;
+  const seen = new Set();
+  return input.map((id) => {
+    const key = String(id || '').trim();
+    return key === 'custom-sites' ? 'sites' : key;
+  }).filter((key) => {
+    if (!POPUP_FAVORITE_ITEMS[key] || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 function normalizeSoundKey(soundKey, fallback) {
   const key = String(soundKey || '').trim();
@@ -412,6 +437,153 @@ function setHidden(id, hidden) {
   const el = $(id);
   if (el) el.classList.toggle('hidden', !!hidden);
 }
+function getFavoriteSubtext(id, cfg) {
+  const sitesApi = getSitesApi();
+  const builtinSites = Array.isArray(sitesApi?.BUILTIN_SITES) ? sitesApi.BUILTIN_SITES : [];
+  const builtinEnabledCount = builtinSites.filter((site) => !!cfg.enabledSites?.[site.key]).length;
+  const customEnabledCount = (Array.isArray(cfg.customSites) ? cfg.customSites : []).filter((site) => !!site.enabled).length;
+  const alertEnabled = !!(cfg.individualCompletionNotificationEnabled || cfg.batchCompletionNotificationEnabled);
+  switch (id) {
+    case 'alerts': return alertEnabled ? '작업 완료 시 알림 표시' : '완료 알림 꺼짐';
+    case 'steering': return cfg.steeringEnabled ? `${cfg.steeringTheme === 'light' ? '라이트' : '다크'} 패널` : '런처 꺼짐';
+    case 'dnd': return cfg.dndMode ? '완료 팝업 숨김' : '완료 팝업 표시';
+    case 'sites': return `기본 ${builtinEnabledCount}개 · 직접 추가 ${customEnabledCount}개 사용 중`;
+    case 'templates': return `저장된 템플릿 ${(cfg.steeringTemplates || []).length}개`;
+    case 'titles': return `추적 중인 탭 ${runtimeSnapshot.items.length}개`;
+    case 'advanced': return '표시 방식 · 이력 · 자동 새로고침';
+    case 'utilities': return '설정 백업 · 복원 · 완료 이력';
+    case 'gemini': return cfg.geminiProbeEnabled ? '자동 완료 확인 켜짐' : '자동 완료 확인 꺼짐';
+    default: return '';
+  }
+}
+function applyFavoriteToggle(id, checked, cfg) {
+  if (id === 'alerts') {
+    cfg.individualCompletionNotificationEnabled = !!checked;
+    cfg.batchCompletionNotificationEnabled = !!checked;
+    if ($('individual-alert-toggle')) $('individual-alert-toggle').checked = !!checked;
+    if ($('batch-alert-toggle')) $('batch-alert-toggle').checked = !!checked;
+  } else if (id === 'steering') {
+    cfg.steeringEnabled = !!checked;
+    if ($('steering-toggle')) $('steering-toggle').checked = !!checked;
+    if ($('advanced-steering-enabled')) $('advanced-steering-enabled').checked = !!checked;
+  } else if (id === 'dnd') {
+    cfg.dndMode = !!checked;
+    if ($('dnd-toggle')) $('dnd-toggle').checked = !!checked;
+  } else {
+    return;
+  }
+  renderFavorites(cfg);
+  saveConfig(cfg, () => {
+    refreshSummary(cfg);
+    refreshRuntimeDashboard(cfg, true);
+    const label = POPUP_FAVORITE_ITEMS[id]?.title || '즐겨찾기';
+    setHint(`${label} ${checked ? '켜짐' : '꺼짐'}`);
+  });
+}
+function renderFavorites(cfg) {
+  const container = $('favorites-list');
+  const empty = $('favorites-empty');
+  const count = $('favorites-count');
+  if (!container) return;
+  const favorites = normalizePopupFavorites(cfg.popupFavorites);
+  cfg.popupFavorites = favorites;
+  const renderSignature = JSON.stringify({
+    favorites,
+    alert: !!(cfg.individualCompletionNotificationEnabled || cfg.batchCompletionNotificationEnabled),
+    steering: !!cfg.steeringEnabled,
+    steeringTheme: cfg.steeringTheme,
+    dnd: !!cfg.dndMode,
+    sites: cfg.enabledSites,
+    customSites: (cfg.customSites || []).map((site) => [site.id || site.key || site.url || '', !!site.enabled]),
+    templates: (cfg.steeringTemplates || []).length,
+    tracked: runtimeSnapshot.items.length,
+    quiet: [!!cfg.quietHoursEnabled, cfg.quietHoursStart, cfg.quietHoursEnd],
+    gemini: !!cfg.geminiProbeEnabled,
+  });
+  if (renderSignature === lastFavoritesRenderSignature) return;
+  lastFavoritesRenderSignature = renderSignature;
+  container.innerHTML = '';
+  if (count) count.textContent = `${favorites.length}개`;
+  if (empty) empty.classList.toggle('hidden', favorites.length > 0);
+  favorites.forEach((id) => {
+    const item = POPUP_FAVORITE_ITEMS[id];
+    if (!item) return;
+    const row = document.createElement(item.toggle ? 'div' : 'button');
+    row.className = 'quick-function-row';
+    if (!item.toggle) {
+      row.type = 'button';
+      row.setAttribute('aria-label', `${item.title} 열기`);
+      row.addEventListener('click', () => openSheet(item.sheet, item.anchor));
+    }
+    const icon = document.createElement('span');
+    icon.className = 'quick-function-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    const iconImg = document.createElement('img');
+    iconImg.src = `../assets/icons/${item.icon}`;
+    iconImg.alt = '';
+    icon.appendChild(iconImg);
+    const title = document.createElement('span');
+    title.className = 'quick-function-title';
+    title.textContent = item.title;
+    const sub = document.createElement('span');
+    sub.className = 'quick-function-sub';
+    sub.textContent = getFavoriteSubtext(id, cfg);
+    row.appendChild(icon);
+    row.appendChild(title);
+    row.appendChild(sub);
+    if (item.toggle) {
+      const label = document.createElement('label');
+      label.className = 'switch';
+      label.setAttribute('aria-label', `${item.title} 켜기 또는 끄기`);
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.id = `quick-${id}-toggle`;
+      input.checked = id === 'alerts'
+        ? !!(cfg.individualCompletionNotificationEnabled || cfg.batchCompletionNotificationEnabled)
+        : (id === 'steering' ? !!cfg.steeringEnabled : !!cfg.dndMode);
+      input.addEventListener('change', () => applyFavoriteToggle(id, input.checked, cfg));
+      const slider = document.createElement('span');
+      slider.className = 'slider';
+      label.appendChild(input);
+      label.appendChild(slider);
+      row.appendChild(label);
+    } else {
+      const chevron = document.createElement('span');
+      chevron.className = 'simple-chevron';
+      chevron.setAttribute('aria-hidden', 'true');
+      const chevronImg = document.createElement('img');
+      chevronImg.src = '../assets/icons/arrow-right.svg';
+      chevronImg.alt = '';
+      chevron.appendChild(chevronImg);
+      row.appendChild(chevron);
+    }
+    container.appendChild(row);
+  });
+}
+function renderFavoriteButtons(cfg) {
+  const favorites = new Set(normalizePopupFavorites(cfg.popupFavorites));
+  document.querySelectorAll('[data-favorite-id]').forEach((button) => {
+    const id = String(button.getAttribute('data-favorite-id') || '');
+    const active = favorites.has(id);
+    const title = POPUP_FAVORITE_ITEMS[id]?.title || '이 기능';
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    button.setAttribute('aria-label', active ? `${title} 즐겨찾기에서 제거` : `${title} 즐겨찾기에 추가`);
+    button.title = active ? '즐겨찾기에서 제거' : '즐겨찾기에 추가';
+  });
+}
+function togglePopupFavorite(id, cfg) {
+  if (!POPUP_FAVORITE_ITEMS[id]) return;
+  const current = normalizePopupFavorites(cfg.popupFavorites);
+  const removing = current.includes(id);
+  cfg.popupFavorites = removing ? current.filter((itemId) => itemId !== id) : [...current, id];
+  renderFavorites(cfg);
+  renderFavoriteButtons(cfg);
+  saveConfig(cfg, () => {
+    const title = POPUP_FAVORITE_ITEMS[id]?.title || '기능';
+    setHint(`${title} 즐겨찾기 ${removing ? '제거됨' : '추가됨'}`);
+  });
+}
 function getSitesStorageKeys() {
   const sitesApi = getSitesApi();
   return {
@@ -457,6 +629,7 @@ function buildConfigStoragePayload(cfg) {
     steeringNewChatTabCount: normalizeSteeringNewChatTabCount(cfg.steeringNewChatTabCount),
     steeringTemplates: normalizeTemplateList(cfg.steeringTemplates),
     steeringRecentDraft: String(cfg.steeringRecentDraft || ''),
+    popupFavorites: normalizePopupFavorites(cfg.popupFavorites),
     quietHoursEnabled: !!cfg.quietHoursEnabled,
     quietHoursStart: normalizeClockTime(cfg.quietHoursStart, '23:00'),
     quietHoursEnd: normalizeClockTime(cfg.quietHoursEnd, '08:00'),
@@ -571,6 +744,7 @@ function loadConfig(cb) {
     'steeringTheme',
     'steeringTemplates',
     'steeringRecentDraft',
+    'popupFavorites',
     'quietHoursEnabled',
     'quietHoursStart',
     'quietHoursEnd',
@@ -617,6 +791,7 @@ function loadConfig(cb) {
       steeringNewChatTabCount: normalizeSteeringNewChatTabCount(res.steeringNewChatTabCount),
       steeringTemplates: normalizeTemplateList(res.steeringTemplates),
       steeringRecentDraft: String(res.steeringRecentDraft || ''),
+      popupFavorites: normalizePopupFavorites(res.popupFavorites),
       quietHoursEnabled: (typeof res.quietHoursEnabled === 'boolean') ? res.quietHoursEnabled : false,
       quietHoursStart: normalizeClockTime(res.quietHoursStart, '23:00'),
       quietHoursEnd: normalizeClockTime(res.quietHoursEnd, '08:00'),
@@ -1267,10 +1442,13 @@ function refreshSummary(cfg) {
   setToneClass('main-chip-template', 'quick-chip', templateCount > 0 ? 'info' : 'muted');
   setToneClass('main-chip-quiet', 'quick-chip', (snoozed || quiet) ? 'muted' : 'info');
   updateSummaryText('quick-dnd-sub', cfg.dndMode ? '완료 팝업 숨김' : '완료 팝업 표시');
+  updateSummaryText('quick-alert-sub', alertEnabled ? '작업 완료 시 알림 표시' : '완료 알림 꺼짐');
   updateSummaryText('quick-steering-sub', cfg.steeringEnabled ? (cfg.steeringAdvancedEnabled ? `새 채팅 ${normalizeSteeringNewChatTabCount(cfg.steeringNewChatTabCount)}탭` : `${cfg.steeringTheme === 'light' ? '라이트' : '다크'} 패널`) : '런처 꺼짐');
   updateSummaryText('quick-quiet-sub', cfg.quietHoursEnabled ? `${getQuietHoursLabel(cfg)}${quiet ? ' · 지금 적용' : ''}` : '사용 안 함');
   const quickDnd = $('quick-dnd-toggle');
   if (quickDnd && quickDnd.checked !== !!cfg.dndMode) quickDnd.checked = !!cfg.dndMode;
+  const quickAlert = $('quick-alert-toggle');
+  if (quickAlert && quickAlert.checked !== !!alertEnabled) quickAlert.checked = !!alertEnabled;
   const quickSteering = $('quick-steering-toggle');
   if (quickSteering && quickSteering.checked !== !!cfg.steeringEnabled) quickSteering.checked = !!cfg.steeringEnabled;
   const steeringAdvancedToggle = $('steering-advanced-toggle');
@@ -1309,14 +1487,24 @@ function refreshSummary(cfg) {
   setHidden('history-divider', !cfg.completionHistoryEnabled);
   setHidden('history-title', !cfg.completionHistoryEnabled);
   setHidden('completion-history', !cfg.completionHistoryEnabled);
+  renderFavorites(cfg);
+  renderFavoriteButtons(cfg);
 }
-function openSheet(sheetId) {
+function openSheet(sheetId, anchorId = '') {
   document.querySelectorAll('.sheet.active').forEach((el) => el.classList.remove('active'));
   const target = $(sheetId);
   if (target) {
     target.classList.add('active');
     const scroller = target.querySelector('.sheet-scroll');
     if (scroller) scroller.scrollTop = 0;
+    if (scroller && anchorId) {
+      const anchor = $(anchorId);
+      if (anchor && target.contains(anchor)) {
+        setTimeout(() => {
+          scroller.scrollTop = Math.max(0, anchor.offsetTop - 72);
+        }, 0);
+      }
+    }
     const closeButton = target.querySelector('[data-close-sheet]');
     if (closeButton && typeof closeButton.focus === 'function') setTimeout(() => closeButton.focus(), 0);
   }
@@ -2026,6 +2214,11 @@ function setSnoozeUntil(ts, cfg) {
   });
 }
 function wireActions(cfg) {
+  document.querySelectorAll('[data-favorite-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      togglePopupFavorite(String(button.getAttribute('data-favorite-id') || ''), cfg);
+    });
+  });
   const dndToggle = $('dnd-toggle');
   if (dndToggle) {
     dndToggle.checked = !!cfg.dndMode;
@@ -2047,6 +2240,22 @@ function wireActions(cfg) {
         refreshSummary(cfg);
         refreshRuntimeDashboard(cfg, true);
         setHint('저장됨');
+      });
+    });
+  }
+  const quickAlertToggle = $('quick-alert-toggle');
+  if (quickAlertToggle) {
+    quickAlertToggle.checked = !!(cfg.individualCompletionNotificationEnabled || cfg.batchCompletionNotificationEnabled);
+    quickAlertToggle.addEventListener('change', () => {
+      const enabled = !!quickAlertToggle.checked;
+      cfg.individualCompletionNotificationEnabled = enabled;
+      cfg.batchCompletionNotificationEnabled = enabled;
+      if ($('individual-alert-toggle')) $('individual-alert-toggle').checked = enabled;
+      if ($('batch-alert-toggle')) $('batch-alert-toggle').checked = enabled;
+      saveConfig(cfg, () => {
+        refreshSummary(cfg);
+        refreshRuntimeDashboard(cfg, true);
+        setHint(enabled ? '완료 알림 켜짐' : '완료 알림 꺼짐');
       });
     });
   }

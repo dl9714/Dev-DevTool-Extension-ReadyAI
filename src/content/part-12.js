@@ -17,6 +17,7 @@ function bindHandlersOnce() {
   document.addEventListener('click', markAsAcknowledged, true);
   document.addEventListener('scroll', markAsAcknowledged, true);
   document.addEventListener('wheel', markAsAcknowledged, { passive: true, capture: true });
+  document.addEventListener('keydown', handleChatGptNativeComposerFollowupEnter, true);
   document.addEventListener('keydown', markTypingAcknowledged, true);
   document.addEventListener('input', markTypingAcknowledged, true);
   // 탭 활성/비활성 전환 시에도 상태 재평가(백그라운드 완료 감지 보강)
@@ -287,7 +288,7 @@ try {
   });
 } catch (_) {}
 refreshSiteFromStorage();
-console.log('[Ready_Ai] content script loaded');
+console.log('[Ready_Ai] content script loaded', READY_AI_CONTENT_BUILD_VERSION);
 // background(service_worker)에서 강제 체크 요청
 try {
   ((readyAiContentInstanceSeq) => {
@@ -296,7 +297,7 @@ try {
     if (!msg) return;
     if (msg.topFrameOnly && !IS_TOP_FRAME) return;
     const action = String(msg.action || '');
-    const tabLevelSteeringAction = /^(send_steering_prompt_now|enqueue_steering_prompt|clear_steering_queue|process_steering_queue_now|get_steering_state)$/.test(action);
+    const tabLevelSteeringAction = /^(open_steering_panel|send_steering_prompt_now|enqueue_steering_prompt|clear_steering_queue|process_steering_queue_now|get_steering_state)$/.test(action);
     if (!IS_TOP_FRAME && tabLevelSteeringAction) return;
     if (msg.action === 'ping') {
       try {
@@ -352,6 +353,26 @@ try {
     if (msg.action === 'custom_tab_title_cleared') {
       setCustomTabTitleValue('');
       try { sendResponse?.({ ok: true }); } catch (_) {}
+      return;
+    }
+    if (msg.action === 'open_steering_panel') {
+      if (!steeringEnabled) {
+        try { sendResponse?.({ ok: false, message: '후속 지시 기능이 꺼져 있습니다.' }); } catch (_) {}
+        return;
+      }
+      if (!monitoring) {
+        try { sendResponse?.({ ok: false, message: '이 탭은 Ready_Ai 지원 대상이 아닙니다.' }); } catch (_) {}
+        return;
+      }
+      steeringPanelOpen = true;
+      ensureSteeringUi();
+      updateSteeringUi();
+      if (steeringAutoFocusInput) {
+        window.setTimeout(() => {
+          try { steeringRefs?.input?.focus(); } catch (_) {}
+        }, 50);
+      }
+      try { sendResponse?.({ ok: true, open: true, count: steeringQueue.length }); } catch (_) {}
       return;
     }
     if (msg.action === 'send_steering_prompt_now') {

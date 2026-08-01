@@ -384,6 +384,19 @@ var STEERING_UI_STYLE_TEMPLATE_B = `
       .status[data-state="error"] {
         color: #f87171;
       }
+      .maker-credit {
+        color: #64748b;
+        font-size: 9px;
+        font-weight: 700;
+        line-height: 1.35;
+        letter-spacing: 0.01em;
+        white-space: nowrap;
+        flex: 0 0 auto;
+        align-self: center;
+      }
+      .dock[data-theme="light"] .maker-credit {
+        color: #64748b;
+      }
       .attachment-wrap {
         display: none;
         flex-direction: column;
@@ -848,6 +861,464 @@ var STEERING_UI_STYLE_TEMPLATE_B = `
       }
       .dock[data-theme="light"] .status {
         color: #2563eb;
+      }
+      /* Codex-style follow-up composer: queue by default, steer with a modifier. */
+      .dock {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+      }
+      .card,
+      .queue-wrap {
+        width: min(430px, calc(100vw - 28px));
+        border-color: rgba(255, 255, 255, 0.1);
+        background: #2b2b2b;
+        border-radius: 18px;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
+      }
+      .card {
+        padding: 14px;
+      }
+      .top {
+        align-items: center;
+        padding-bottom: 10px;
+        border-bottom-color: rgba(255, 255, 255, 0.08);
+      }
+      .title {
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .meta,
+      .status,
+      .queue-label {
+        color: rgba(255, 255, 255, 0.56);
+      }
+      .composer-shell {
+        margin-top: 10px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 16px;
+        background: #212121;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .composer-shell:focus-within {
+        border-color: rgba(255, 255, 255, 0.24);
+        box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.055);
+      }
+      .composer-shell .input {
+        display: block;
+        box-sizing: border-box;
+        min-height: 82px;
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        padding: 12px 13px 7px;
+        font-size: 13px;
+        line-height: 1.5;
+        box-shadow: none;
+      }
+      .composer-shell .input:focus {
+        border: 0;
+        box-shadow: none;
+      }
+      .shortcut-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px 12px;
+        flex-wrap: wrap;
+        padding: 7px 10px 10px;
+        color: rgba(255, 255, 255, 0.46);
+        font-size: 10px;
+        line-height: 1.35;
+      }
+      .shortcut-row span {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .shortcut-row kbd {
+        min-height: 18px;
+        box-sizing: border-box;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 5px;
+        background: rgba(255, 255, 255, 0.07);
+        padding: 2px 5px;
+        color: rgba(255, 255, 255, 0.78);
+        font-family: inherit;
+        font-size: 9px;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+      .actions {
+        gap: 7px;
+        margin-top: 10px;
+      }
+      .btn {
+        min-height: 34px;
+        border-color: rgba(255, 255, 255, 0.14);
+        border-radius: 10px;
+        background: #f4f4f4;
+        color: #171717;
+        font-size: 11px;
+        font-weight: 700;
+        box-shadow: none;
+      }
+      .btn.secondary,
+      .btn.subtle {
+        border-color: rgba(255, 255, 255, 0.11);
+        background: rgba(255, 255, 255, 0.075);
+        color: rgba(255, 255, 255, 0.82);
+      }
+      .btn.subtle {
+        color: rgba(255, 255, 255, 0.56);
+      }
+      .btn:not([disabled]):hover {
+        border-color: rgba(255, 255, 255, 0.22);
+        box-shadow: none;
+        transform: translateY(-1px);
+      }
+      #ready-ai-steering-card > .actions {
+        display: none;
+      }
+      .queue-wrap {
+        max-height: var(--ready-ai-queue-max-height, min(260px, 38vh));
+        padding: 12px;
+      }
+      .queue-head {
+        margin-bottom: 8px;
+      }
+      .queue-label {
+        margin: 0;
+        font-size: 10px;
+        font-weight: 600;
+      }
+      .queue-list {
+        max-height: var(--ready-ai-queue-list-max-height, min(205px, 30vh));
+        gap: 7px;
+      }
+      .queue-item {
+        grid-template-columns: 32px minmax(0, 1fr);
+        gap: 8px;
+        border-color: rgba(255, 255, 255, 0.09);
+        border-radius: 12px;
+        background: #333333;
+        padding: 9px 10px 9px 7px;
+      }
+      .queue-item.editing {
+        border-color: rgba(255, 255, 255, 0.2);
+        background: #383838;
+      }
+      .queue-item.dragging {
+        border-color: rgba(255, 255, 255, 0.24);
+        background: #3a3a3a;
+      }
+      .queue-drag-handle {
+        width: 32px;
+        min-width: 32px;
+        height: 30px;
+        justify-content: center;
+        padding: 0;
+      }
+      .queue-grip {
+        display: none;
+      }
+      .queue-order {
+        width: 24px;
+        height: 24px;
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.72);
+      }
+      .queue-body {
+        gap: 3px;
+      }
+      .queue-item-meta {
+        color: rgba(255, 255, 255, 0.44);
+        font-size: 9px;
+        font-weight: 650;
+        line-height: 1.25;
+      }
+      .queue-text {
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .queue-actions {
+        grid-column: 2;
+        justify-content: flex-start;
+        gap: 5px;
+      }
+      .queue-action.solid,
+      .queue-action.muted,
+      .queue-action.immediate,
+      .queue-action.danger {
+        min-height: 26px;
+        box-sizing: border-box;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.055);
+        padding: 5px 8px;
+        color: rgba(255, 255, 255, 0.68);
+        font-size: 10px;
+        font-weight: 650;
+      }
+      .queue-action.immediate {
+        border-color: rgba(255, 255, 255, 0.18);
+        background: rgba(255, 255, 255, 0.12);
+        color: #ffffff;
+      }
+      .queue-action.danger {
+        color: #f0a5a5;
+      }
+      .queue-head-btn {
+        background: rgba(255, 255, 255, 0.055);
+      }
+      .queue-head-btn.resume {
+        border-color: rgba(255, 255, 255, 0.15);
+        background: rgba(255, 255, 255, 0.1);
+        color: #ffffff;
+      }
+      .dock[data-theme="light"] .card,
+      .dock[data-theme="light"] .queue-wrap {
+        border-color: rgba(15, 23, 42, 0.12);
+        background: #ffffff;
+      }
+      .dock[data-theme="light"] .composer-shell {
+        border-color: rgba(15, 23, 42, 0.13);
+        background: #f4f4f4;
+      }
+      .dock[data-theme="light"] .shortcut-row,
+      .dock[data-theme="light"] .meta,
+      .dock[data-theme="light"] .status,
+      .dock[data-theme="light"] .queue-label,
+      .dock[data-theme="light"] .queue-item-meta {
+        color: rgba(15, 23, 42, 0.56);
+      }
+      .dock[data-theme="light"] .shortcut-row kbd {
+        border-color: rgba(15, 23, 42, 0.13);
+        background: rgba(15, 23, 42, 0.05);
+        color: rgba(15, 23, 42, 0.78);
+      }
+      .dock[data-theme="light"] .btn {
+        border-color: #171717;
+        background: #171717;
+        color: #ffffff;
+      }
+      .dock[data-theme="light"] .btn.secondary,
+      .dock[data-theme="light"] .btn.subtle {
+        border-color: rgba(15, 23, 42, 0.12);
+        background: rgba(15, 23, 42, 0.045);
+        color: rgba(15, 23, 42, 0.72);
+      }
+      .dock[data-theme="light"] .queue-item {
+        border-color: rgba(15, 23, 42, 0.1);
+        background: #f7f7f7;
+      }
+      .dock[data-theme="light"] .queue-order {
+        background: rgba(15, 23, 42, 0.07);
+        color: rgba(15, 23, 42, 0.68);
+      }
+      .dock[data-theme="light"] .queue-action.solid,
+      .dock[data-theme="light"] .queue-action.muted,
+      .dock[data-theme="light"] .queue-action.immediate,
+      .dock[data-theme="light"] .queue-action.danger {
+        border-color: rgba(15, 23, 42, 0.11);
+        background: rgba(15, 23, 42, 0.045);
+        color: rgba(15, 23, 42, 0.72);
+      }
+      .dock[data-theme="light"] .queue-action.immediate {
+        background: #171717;
+        color: #ffffff;
+      }
+      /* Queue-only Codex treatment. Keep the composer, tab-title and file controls unchanged. */
+      .queue-wrap {
+        border-color: rgba(255, 255, 255, 0.105);
+        border-radius: 15px;
+        background: #262626;
+        padding: 7px 10px 8px;
+        box-shadow: 0 14px 38px rgba(0, 0, 0, 0.34);
+      }
+      .queue-head {
+        min-height: 22px;
+        margin-bottom: 2px;
+        padding: 0 2px;
+      }
+      .queue-label {
+        color: rgba(255, 255, 255, 0.68);
+        font-size: 10px;
+        font-weight: 650;
+        letter-spacing: -0.01em;
+      }
+      .queue-head-btn {
+        min-height: 22px;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        padding: 3px 6px;
+        color: rgba(255, 255, 255, 0.52);
+        font-size: 9px;
+        font-weight: 600;
+      }
+      .queue-head-btn:not([disabled]):hover {
+        border-color: transparent;
+        background: rgba(255, 255, 255, 0.07);
+        color: rgba(255, 255, 255, 0.82);
+        box-shadow: none;
+      }
+      .queue-head-btn.resume {
+        border: 0;
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.86);
+      }
+      .queue-list {
+        max-height: var(--ready-ai-queue-list-max-height, min(220px, 32vh));
+        gap: 0;
+        overflow-x: hidden;
+        border-top: 1px solid rgba(255, 255, 255, 0.075);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.075);
+        padding: 0;
+      }
+      .queue-item {
+        grid-template-columns: 34px minmax(90px, 1fr) auto;
+        gap: 8px;
+        min-height: 32px;
+        box-sizing: border-box;
+        border: 0;
+        border-top: 1px solid rgba(255, 255, 255, 0.07);
+        border-radius: 0;
+        background: transparent;
+        padding: 4px 5px 4px 2px;
+        transition: background 120ms ease, opacity 120ms ease, transform 120ms ease;
+      }
+      .queue-item:first-child {
+        border-top: 0;
+      }
+      .queue-item:not(.editing):not(.dragging):hover {
+        background: rgba(255, 255, 255, 0.035);
+      }
+      .queue-item.editing {
+        border-color: rgba(255, 255, 255, 0.07);
+        border-radius: 9px;
+        background: rgba(255, 255, 255, 0.055);
+      }
+      .queue-item.dragging {
+        border-color: rgba(255, 255, 255, 0.13);
+        border-radius: 9px;
+        background: #343434;
+      }
+      .queue-drag-handle {
+        width: 34px;
+        min-width: 34px;
+        height: 24px;
+        justify-content: flex-start;
+        gap: 3px;
+        padding: 0 2px;
+        color: rgba(255, 255, 255, 0.42);
+      }
+      .queue-grip {
+        display: block;
+        width: 7px;
+        height: 17px;
+        flex-basis: 7px;
+        opacity: 0.72;
+      }
+      .queue-order {
+        width: 17px;
+        height: 22px;
+        border-radius: 0;
+        background: transparent;
+        color: rgba(255, 255, 255, 0.78);
+        font-size: 10px;
+        font-weight: 650;
+      }
+      .queue-body {
+        gap: 0;
+      }
+      .queue-item-meta {
+        display: none;
+      }
+      .queue-text {
+        color: rgba(255, 255, 255, 0.89);
+        font-size: 11px;
+        font-weight: 500;
+        line-height: 1.4;
+      }
+      .queue-actions {
+        grid-column: 3;
+        align-self: center;
+        justify-content: flex-end;
+        gap: 1px;
+        white-space: nowrap;
+      }
+      .queue-action.solid,
+      .queue-action.muted,
+      .queue-action.immediate,
+      .queue-action.danger {
+        min-height: 22px;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        padding: 3px 6px;
+        color: rgba(255, 255, 255, 0.43);
+        font-size: 9px;
+        font-weight: 550;
+      }
+      .queue-action.immediate {
+        color: rgba(255, 255, 255, 0.61);
+      }
+      .queue-action.danger {
+        color: rgba(255, 255, 255, 0.39);
+      }
+      .queue-action:not([disabled]):hover {
+        background: rgba(255, 255, 255, 0.075);
+        color: rgba(255, 255, 255, 0.9);
+      }
+      .dock[data-theme="light"] .queue-wrap {
+        border-color: rgba(15, 23, 42, 0.11);
+        background: #ffffff;
+      }
+      .dock[data-theme="light"] .queue-label {
+        color: rgba(15, 23, 42, 0.68);
+      }
+      .dock[data-theme="light"] .queue-list {
+        border-color: rgba(15, 23, 42, 0.09);
+      }
+      .dock[data-theme="light"] .queue-item {
+        border-color: rgba(15, 23, 42, 0.08);
+        background: transparent;
+      }
+      .dock[data-theme="light"] .queue-item:not(.editing):not(.dragging):hover {
+        background: rgba(15, 23, 42, 0.035);
+      }
+      .dock[data-theme="light"] .queue-drag-handle,
+      .dock[data-theme="light"] .queue-item-meta {
+        color: rgba(15, 23, 42, 0.42);
+      }
+      .dock[data-theme="light"] .queue-order,
+      .dock[data-theme="light"] .queue-text {
+        background: transparent;
+        color: rgba(15, 23, 42, 0.82);
+      }
+      .dock[data-theme="light"] .queue-action.solid,
+      .dock[data-theme="light"] .queue-action.muted,
+      .dock[data-theme="light"] .queue-action.immediate,
+      .dock[data-theme="light"] .queue-action.danger,
+      .dock[data-theme="light"] .queue-head-btn {
+        border: 0;
+        background: transparent;
+        color: rgba(15, 23, 42, 0.52);
+      }
+      .dock[data-theme="light"] .queue-action:not([disabled]):hover,
+      .dock[data-theme="light"] .queue-head-btn:not([disabled]):hover {
+        background: rgba(15, 23, 42, 0.055);
+        color: rgba(15, 23, 42, 0.86);
+      }
+      @media (max-width: 460px) {
+        .queue-item {
+          grid-template-columns: 34px minmax(0, 1fr);
+        }
+        .queue-actions {
+          grid-column: 2;
+          justify-content: flex-start;
+        }
       }
     </style>
 `;

@@ -67,7 +67,7 @@ const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
 const READY_AI_CONTENT_VERSION = '2026-06-12.21-single-queue-dispatch';
-const READY_AI_CONTENT_BUILD_VERSION = '2026-06-12.34-wider-scrollbar-gutter';
+const READY_AI_CONTENT_BUILD_VERSION = '2026-08-02.25-dnd-favorite-toggle';
 const READY_AI_CANONICAL_EXTENSION_ID = 'deojggohikpfbhgdjbdogmkdgpkcighm';
 const READY_AI_LEGACY_MIRROR_EXTENSION_ID = 'ajnolilmicdilijebljgchoodgajnfeg';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
@@ -633,6 +633,303 @@ function pScriptingExecMainFunction(tabId, func, args = []) {
     };
     run(true);
   });
+}
+async function triggerChatGptNativeImmediateSteer(tabId, expectedText) {
+  if (typeof tabId !== 'number') return { ok: false, message: 'ChatGPT 탭을 찾지 못했습니다.' };
+  return await pScriptingExecMainFunction(tabId, async (rawExpectedText) => {
+    const normalize = (value) => String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+    const expected = normalize(rawExpectedText);
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const composer = document.querySelector('#prompt-textarea')
+      || document.querySelector('[data-testid="prompt-textarea"]')
+      || Array.from(document.querySelectorAll('textarea, div[contenteditable="true"][role="textbox"]')).find((candidate) => {
+        try {
+          const rect = candidate.getBoundingClientRect();
+          const style = getComputedStyle(candidate);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        } catch (_) {
+          return false;
+        }
+      });
+    if (!composer || !expected) return { ok: false, message: 'ChatGPT 입력창 또는 지시문을 찾지 못했습니다.' };
+    const readComposer = () => normalize(
+      composer.tagName === 'TEXTAREA' || composer.tagName === 'INPUT'
+        ? composer.value
+        : (composer.innerText || composer.textContent || '')
+    );
+    const setComposerText = (value) => {
+      const nextValue = String(value || '');
+      const tag = String(composer.tagName || '').toLowerCase();
+      try { composer.focus({ preventScroll: false }); } catch (_) {}
+      if (tag === 'textarea' || tag === 'input') {
+        try {
+          const proto = tag === 'textarea' ? window.HTMLTextAreaElement?.prototype : window.HTMLInputElement?.prototype;
+          const setter = proto && Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) setter.call(composer, nextValue);
+          else composer.value = nextValue;
+        } catch (_) {
+          try { composer.value = nextValue; } catch (_) {}
+        }
+      } else if (composer.isContentEditable) {
+        try {
+          const selection = window.getSelection?.();
+          const range = document.createRange();
+          range.selectNodeContents(composer);
+          selection?.removeAllRanges?.();
+          selection?.addRange?.(range);
+          let inserted = false;
+          try { inserted = document.execCommand('insertText', false, nextValue); } catch (_) {}
+          if (!inserted || readComposer() !== normalize(nextValue)) {
+            composer.textContent = '';
+            composer.appendChild(document.createTextNode(nextValue));
+          }
+        } catch (_) {
+          try { composer.textContent = nextValue; } catch (_) {}
+        }
+      }
+      try { composer.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, data: nextValue, inputType: 'insertReplacementText' })); } catch (_) {}
+      try { composer.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, data: nextValue, inputType: 'insertText' })); } catch (_) {
+        try { composer.dispatchEvent(new Event('input', { bubbles: true, cancelable: true })); } catch (_) {}
+      }
+      try { composer.dispatchEvent(new Event('change', { bubbles: true, cancelable: true })); } catch (_) {}
+      return readComposer() === normalize(nextValue);
+    };
+    if (readComposer() !== expected) {
+      setComposerText(rawExpectedText);
+      await sleep(120);
+      if (readComposer() !== expected) {
+        return {
+          ok: false,
+          message: 'ChatGPT 입력창의 지시문이 일치하지 않습니다.',
+          href: String(location.href || ''),
+          composerCount: document.querySelectorAll('#prompt-textarea').length,
+          expectedText: expected.slice(0, 180),
+          composerText: readComposer().slice(0, 180),
+          composerHtml: String(composer.outerHTML || '').slice(0, 360),
+        };
+      }
+    }
+    const visibleTurns = () => Array.from(document.querySelectorAll('[data-testid^="conversation-turn-"]')).filter((turn) => {
+      try {
+        const rect = turn.getBoundingClientRect();
+        const style = getComputedStyle(turn);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      } catch (_) {
+        return true;
+      }
+    });
+    const matchingUserTurns = () => visibleTurns().filter((turn) => {
+      const user = turn.querySelector('[data-message-author-role="user"]');
+      return !!user && normalize(user.innerText || user.textContent || '') === expected;
+    });
+    const beforeTurns = visibleTurns().length;
+    const beforeMatchingUsers = matchingUserTurns().length;
+    const rawKeyboardEvent = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      code: 'Enter',
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      ctrlKey: true,
+      metaKey: false,
+    });
+    const nativeEvent = new Proxy(rawKeyboardEvent, {
+      get(target, prop) {
+        if (prop === 'isTrusted') return true;
+        if (prop === 'target' || prop === 'currentTarget' || prop === 'srcElement') return composer;
+        const value = Reflect.get(target, prop, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    let defaultPrevented = false;
+    let propagationStopped = false;
+    const syntheticEvent = {
+      nativeEvent,
+      type: 'keydown',
+      key: 'Enter',
+      code: 'Enter',
+      which: 13,
+      keyCode: 13,
+      charCode: 13,
+      ctrlKey: true,
+      metaKey: false,
+      shiftKey: false,
+      altKey: false,
+      repeat: false,
+      isComposing: false,
+      isTrusted: true,
+      target: composer,
+      currentTarget: composer,
+      preventDefault() { defaultPrevented = true; try { rawKeyboardEvent.preventDefault(); } catch (_) {} },
+      stopPropagation() { propagationStopped = true; try { rawKeyboardEvent.stopPropagation(); } catch (_) {} },
+      persist() {},
+      isDefaultPrevented() { return defaultPrevented; },
+      isPropagationStopped() { return propagationStopped; },
+    };
+    const debugKeys = [];
+    const handlers = [];
+    const handlerDebug = [];
+    const seenHandlers = new Set();
+    const addHandler = (fn, label, currentTarget) => {
+      if (typeof fn !== 'function' || seenHandlers.has(fn)) return;
+      seenHandlers.add(fn);
+      handlers.push({ fn, label, currentTarget: currentTarget || composer });
+      if (handlerDebug.length < 12) {
+        let source = '';
+        try { source = String(fn).replace(/\s+/g, ' ').slice(0, 320); } catch (_) {}
+        handlerDebug.push(`${label}=${source}`);
+      }
+    };
+    let node = composer;
+    for (let depth = 0; node && depth < 16; depth += 1, node = node.parentElement) {
+      let ownNames = [];
+      try { ownNames = Object.getOwnPropertyNames(node); } catch (_) { ownNames = []; }
+      for (const name of ownNames) {
+        if (debugKeys.length < 40 && /react|fiber|props|prose|editor|view/i.test(name)) debugKeys.push(`${depth}:${name}`);
+        let value = null;
+        try { value = node[name]; } catch (_) { value = null; }
+        if (/^__reactProps/i.test(name) && value && typeof value === 'object') {
+          addHandler(value.onKeyDownCapture, `${depth}:reactProps.onKeyDownCapture`, node);
+          addHandler(value.onKeyDown, `${depth}:reactProps.onKeyDown`, node);
+        }
+        if (/^__react(?:Fiber|InternalInstance)/i.test(name) && value && typeof value === 'object') {
+          let fiber = value;
+          const seenFibers = new Set();
+          for (let step = 0; fiber && step < 45 && !seenFibers.has(fiber); step += 1, fiber = fiber.return) {
+            seenFibers.add(fiber);
+            for (const props of [fiber.memoizedProps, fiber.pendingProps]) {
+              if (!props || typeof props !== 'object') continue;
+              addHandler(props.onKeyDownCapture, `${depth}:fiber${step}.onKeyDownCapture`, node);
+              addHandler(props.onKeyDown, `${depth}:fiber${step}.onKeyDown`, node);
+            }
+          }
+        }
+      }
+    }
+    const views = [];
+    const viewDebug = [];
+    const pmDebug = [];
+    try {
+      let desc = composer.pmViewDesc || null;
+      const seenDescs = new Set();
+      for (let depth = 0; desc && depth < 12 && !seenDescs.has(desc); depth += 1, desc = desc.parent) {
+        seenDescs.add(desc);
+        const own = Object.keys(desc).slice(0, 80);
+        const proto = Object.getOwnPropertyNames(Object.getPrototypeOf(desc) || {}).slice(0, 80);
+        pmDebug.push(`${depth}:${desc.constructor?.name || 'ViewDesc'} own=${own.join(',')} proto=${proto.join(',')}`);
+      }
+    } catch (_) {}
+    const seenObjects = new Set();
+    const objectQueue = [];
+    node = composer;
+    for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
+      let names = [];
+      try { names = Object.getOwnPropertyNames(node); } catch (_) { names = []; }
+      for (const name of names) {
+        if (!/view|editor|prose|react|fiber|props|pm/i.test(name)) continue;
+        try { objectQueue.push({ value: node[name], depth: 0, label: `${depth}:${name}` }); } catch (_) {}
+      }
+    }
+    while (objectQueue.length && seenObjects.size < 2600) {
+      const current = objectQueue.shift();
+      const value = current?.value;
+      if (!value || (typeof value !== 'object' && typeof value !== 'function') || seenObjects.has(value)) continue;
+      seenObjects.add(value);
+      if (!value.nodeType && value.dom && value.state && (typeof value.dispatchEvent === 'function' || typeof value.dispatch === 'function')) {
+        views.push({ view: value, label: current.label });
+        if (viewDebug.length < 12) {
+          let docText = '';
+          try { docText = normalize(value.state?.doc?.textContent || '').slice(0, 180); } catch (_) {}
+          viewDebug.push(`${current.label} ctor=${value.constructor?.name || ''} dispatchEvent=${typeof value.dispatchEvent} dispatch=${typeof value.dispatch} doc=${docText}`);
+        }
+      }
+      if (current.depth >= 7) continue;
+      let keys = [];
+      try { keys = Object.keys(value).slice(0, 180); } catch (_) { keys = []; }
+      for (const key of keys) {
+        if (current.depth > 0 && !/view|editor|prose|pm|current|state|props|memoized|child|return|next|queue|base|value|ref|instance|context|store/i.test(key)) continue;
+        try { objectQueue.push({ value: value[key], depth: current.depth + 1, label: `${current.label}.${key}` }); } catch (_) {}
+      }
+    }
+    const waitForImmediateTurn = async (route, timeoutMs = 1250) => {
+      const deadline = Date.now() + Math.max(500, Number(timeoutMs) || 1250);
+      while (Date.now() <= deadline) {
+        const turns = visibleTurns();
+        const matches = matchingUserTurns();
+        const targetTurn = matches.length > beforeMatchingUsers ? matches[matches.length - 1] : null;
+        const targetIndex = targetTurn ? turns.indexOf(targetTurn) : -1;
+        const nextTurn = targetIndex >= 0 ? turns[targetIndex + 1] : null;
+        const nextTurnIsUser = !!nextTurn?.querySelector?.('[data-message-author-role="user"]');
+        if (targetIndex >= 0 && nextTurn && !nextTurnIsUser) {
+          return { ok: true, route, immediate: true, turnsAdded: turns.length - beforeTurns };
+        }
+        await sleep(70);
+      }
+      return null;
+    };
+    const syncEditorViewText = async (candidate) => {
+      const view = candidate?.view;
+      if (!view?.state?.doc || typeof view.dispatch !== 'function') return false;
+      try {
+        const current = normalize(view.state.doc.textContent || '');
+        if (current !== expected) {
+          const size = Math.max(0, Number(view.state.doc.content?.size) || 0);
+          let tr = view.state.tr;
+          if (!tr || typeof tr.insertText !== 'function') return false;
+          tr = size >= 2
+            ? tr.insertText(String(rawExpectedText || ''), 1, Math.max(1, size - 1))
+            : tr.insertText(String(rawExpectedText || ''));
+          view.dispatch(tr);
+          await sleep(90);
+        }
+        try { view.focus?.(); } catch (_) {}
+        return normalize(view.state.doc.textContent || '') === expected;
+      } catch (_) {
+        return false;
+      }
+    };
+    const attempted = [];
+    for (const candidate of views) {
+      const synced = await syncEditorViewText(candidate);
+      attempted.push(`sync:${candidate.label}:${synced ? 'ok' : 'fail'}`);
+      if (!synced) continue;
+      attempted.push(`view:${candidate.label}`);
+      try {
+        if (typeof candidate.view.dispatchEvent !== 'function') continue;
+        candidate.view.dispatchEvent(nativeEvent);
+      } catch (_) { continue; }
+      const result = await waitForImmediateTurn(`view:${candidate.label}`);
+      if (result) return { ...result, attempted, debugKeys, handlerDebug, viewDebug, pmDebug };
+      if (readComposer() !== expected) break;
+    }
+    if (readComposer() === expected) {
+      for (const candidate of handlers) {
+        attempted.push(candidate.label);
+        try {
+          syntheticEvent.currentTarget = candidate.currentTarget;
+          const returned = candidate.fn.call(undefined, syntheticEvent);
+          if (returned && typeof returned.then === 'function') await returned;
+        } catch (_) {
+          continue;
+        }
+        const result = await waitForImmediateTurn(candidate.label);
+        if (result) return { ...result, attempted, debugKeys, handlerDebug, viewDebug, pmDebug };
+        if (readComposer() !== expected) break;
+      }
+    }
+    return {
+      ok: false,
+      immediate: false,
+      composerCleared: !readComposer(),
+      turnsAdded: visibleTurns().length - beforeTurns,
+      attempted,
+      debugKeys,
+      handlerDebug,
+      viewDebug,
+      pmDebug,
+      message: 'ChatGPT의 Ctrl+Enter 즉시 반영 경로를 찾지 못했습니다.',
+    };
+  }, [expectedText]);
 }
 async function ensureMainWorldTitleGuard(tabId) {
   if (typeof tabId !== 'number') return false;
@@ -2223,6 +2520,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       })
       .catch((err) => sendResponse({ ok: false, message: err?.message || 'content injection failed' }));
+    return true;
+  }
+  if (message.action === 'chatgpt_native_immediate_steer') {
+    const tabUrl = sender.tab?.url || sender.url || '';
+    if (frameId !== 0 || !isChatGptUrl(tabUrl)) {
+      sendResponse({ ok: false, message: 'ChatGPT 최상위 탭이 아닙니다.' });
+      return;
+    }
+    triggerChatGptNativeImmediateSteer(tabId, message.text || '')
+      .then((result) => sendResponse(result || { ok: false, message: '즉시 반영 결과를 확인하지 못했습니다.' }))
+      .catch((err) => sendResponse({ ok: false, message: err?.message || '즉시 반영 중 오류가 발생했습니다.' }));
     return true;
   }
   if (isReadyAiPassiveDuplicateBackground()) return;

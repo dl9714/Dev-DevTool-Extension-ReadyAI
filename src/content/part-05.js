@@ -12,6 +12,7 @@ async function tryTriggerComposerSend(composer, trigger, options = {}) {
   return await waitForSubmissionStart(composer, beforeText, options.submitStartTimeoutMs || options.timeoutMs || 900, {
     hadConversationTurns,
     beforeUrl,
+    ignoreExistingGeneration: !!options.ignoreExistingGeneration,
   });
 }
 function setSteeringStatus(text, isError = false) {

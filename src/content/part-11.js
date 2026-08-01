@@ -74,12 +74,12 @@ function applySteeringUiNow() {
   if (refs.newChatCount && !newChatCountActive && refs.newChatCount.value !== String(steeringNewChatTabCount)) {
     refs.newChatCount.value = String(steeringNewChatTabCount);
   }
-  setSteeringTextIfChanged(refs.primary, getSteeringPrimaryLabel());
+  setSteeringTextIfChanged(refs.primary, steeringAdvancedEnabled ? getSteeringPrimaryLabel() : '후속 대기');
   setSteeringDisabledIfChanged(refs.primary, false);
   const hasDraftText = !!String(refs.input?.value || '').trim();
   const hasDraftImages = getSteeringDraftAttachmentCount() > 0;
   setSteeringDisabledIfChanged(refs.newChatSend, steeringNewChatSendPending || !steeringAdvancedEnabled || !hasDraftText || hasDraftImages);
-  setSteeringDisabledIfChanged(refs.sendNow, !steeringQueue.length && !hasDraftText && !hasDraftImages);
+  setSteeringDisabledIfChanged(refs.sendNow, !hasDraftText && !hasDraftImages || steeringProcessing);
   setSteeringDisabledIfChanged(refs.clear, !steeringQueue.length && !hasDraftText && !hasDraftImages);
   const canRunNext = canUserRunSteeringQueueNow();
   if (refs.runNext) {
@@ -329,6 +329,17 @@ function checkStatus() {
     // open shadowRoot가 동적으로 생기는 사이트(특히 Gemini) 대비
     maybeRescanShadowRoots();
     currentlyGenerating = detectGenerating(activeSite);
+    if (!currentlyGenerating && platform === 'chatgpt') {
+      observeSteeringChatGptAssistantTurn();
+      if (
+        isGenerating
+        && steeringAwaitingTurnCompletion
+        && steeringObservedGenerationSinceSend
+        && !isSteeringChatGptAssistantTurnStable()
+      ) {
+        currentlyGenerating = true;
+      }
+    }
   } catch (_) {
     currentlyGenerating = false;
   } finally {
@@ -403,6 +414,90 @@ function isEditableInteractionTarget(target) {
   if (tagName === 'textarea' || tagName === 'input') return true;
   if (target?.isContentEditable) return true;
   return false;
+}
+function getChatGptNativeComposerForEventTarget(target) {
+  if (!target || getSiteKey() !== 'chatgpt' || isSteeringTarget(target)) return null;
+  const composer = getActiveComposer();
+  if (!composer) return null;
+  try {
+    if (target === composer || composer.contains(target)) return composer;
+  } catch (_) {}
+  return null;
+}
+var chatGptNativeComposerImmediateFallbackTimer = null;
+var chatGptNativeComposerImmediateFallbackSending = false;
+function normalizeChatGptShortcutText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+function countRecentChatGptUserTurnText(text) {
+  const expected = normalizeChatGptShortcutText(text);
+  if (!expected) return 0;
+  let turns = [];
+  try { turns = Array.from(document.querySelectorAll('[data-message-author-role="user"]')).slice(-20); } catch (_) { turns = []; }
+  return turns.filter((turn) => normalizeChatGptShortcutText(turn?.innerText || turn?.textContent || '') === expected).length;
+}
+async function sendChatGptNativeComposerImmediately(composer, text) {
+  chatGptNativeComposerImmediateFallbackSending = true;
+  try {
+    const generatingNow = !!(isGenerating || detectChatGptGeneratingLight());
+    const sent = await sendSteeringItemImmediately({ text, files: [], images: [] }, {
+      source: 'native_chatgpt_composer_steer_now',
+      preferKeyboardShortcut: generatingNow,
+      submitStartTimeoutMs: 1200,
+    });
+    if (sent) return true;
+    try {
+      if (!String(getCurrentComposerText(composer) || '').trim()) setControlValue(composer, text);
+      composer?.focus?.();
+    } catch (_) {}
+    return false;
+  } finally {
+    chatGptNativeComposerImmediateFallbackSending = false;
+  }
+}
+function scheduleChatGptNativeComposerImmediateFallback(composer, text) {
+  if (chatGptNativeComposerImmediateFallbackTimer) {
+    try { clearTimeout(chatGptNativeComposerImmediateFallbackTimer); } catch (_) {}
+  }
+  const matchingTurnCountBefore = countRecentChatGptUserTurnText(text);
+  chatGptNativeComposerImmediateFallbackTimer = setTimeout(() => {
+    chatGptNativeComposerImmediateFallbackTimer = null;
+    if (countRecentChatGptUserTurnText(text) > matchingTurnCountBefore) return;
+    const liveComposer = getActiveComposer() || composer;
+    const currentText = normalizeChatGptShortcutText(getCurrentComposerText(liveComposer));
+    if (!currentText || currentText !== normalizeChatGptShortcutText(text)) return;
+    void sendChatGptNativeComposerImmediately(liveComposer, text);
+  }, 300);
+}
+function handleChatGptNativeComposerFollowupEnter(event) {
+  if (!event || event.key !== 'Enter' || event.repeat || event.isComposing) return;
+  if (!event.isTrusted) return;
+  if (event.shiftKey || event.altKey) return;
+  if (chatGptNativeComposerImmediateFallbackSending) return;
+  if (!monitoring || !steeringEnabled || !IS_TOP_FRAME) return;
+  if (!isChatGptSafeMode() || isReadyAiDuplicateContentInstance()) return;
+  const composer = getChatGptNativeComposerForEventTarget(event.target);
+  if (!composer) return;
+  const generatingNow = !!(isGenerating || detectChatGptGeneratingLight());
+  if (!generatingNow) return;
+  const text = String(getCurrentComposerText(composer) || '').trim();
+  if (!text) return;
+  if (event.ctrlKey || event.metaKey) {
+    if (!chatGptNativeComposerImmediateFallbackSending) {
+      scheduleChatGptNativeComposerImmediateFallback(composer, text);
+    }
+    return;
+  }
+  try { event.preventDefault(); } catch (_) {}
+  try { event.stopImmediatePropagation(); } catch (_) {
+    try { event.stopPropagation(); } catch (_) {}
+  }
+  const queued = enqueueSteeringPrompt(text, { source: 'native_chatgpt_composer' });
+  if (!queued) return;
+  setControlValue(composer, '');
+  setChatGptLightGenerating(true, { observed: true });
+  setSteeringStatus(`${getSteeringQueueCountLabel()} · 응답이 끝나면 자동 전송합니다.`);
+  updateSteeringUi();
 }
 function markTypingAcknowledged(event) {
   if (completionStatus !== 'completed' || isGenerating) return;

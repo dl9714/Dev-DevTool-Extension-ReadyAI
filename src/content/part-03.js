@@ -166,6 +166,71 @@ function markSteeringGenerationObserved() {
   steeringObservedGenerationSinceSend = true;
   clearSteeringAwaitingResponseStart();
 }
+function getChatGptAssistantTurnSnapshot() {
+  if (!isChatGptSafeMode()) return null;
+  let turns = [];
+  try {
+    turns = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+  } catch (_) {
+    turns = [];
+  }
+  const last = turns[turns.length - 1] || null;
+  if (!last) return { count: 0, identity: '', finalized: false };
+  const turn = last.closest?.('[data-testid^="conversation-turn-"]') || last.parentElement || null;
+  const identity = [
+    last.getAttribute?.('data-message-id') || '',
+    last.getAttribute?.('data-testid') || '',
+    turn?.getAttribute?.('data-testid') || '',
+  ].join('|');
+  const finalized = !!turn?.querySelector?.(
+    'button[data-testid="copy-turn-action-button"],button[aria-label*="응답 복사"],button[aria-label*="Copy response"]'
+  );
+  return {
+    count: turns.length,
+    identity,
+    finalized,
+  };
+}
+function captureSteeringChatGptAssistantBaseline() {
+  steeringChatGptAssistantObservedAt = 0;
+  steeringChatGptAssistantFinalizedAt = 0;
+  steeringChatGptAssistantBaseline = getChatGptAssistantTurnSnapshot();
+}
+function clearSteeringChatGptAssistantObservation() {
+  steeringChatGptAssistantBaseline = null;
+  steeringChatGptAssistantObservedAt = 0;
+  steeringChatGptAssistantFinalizedAt = 0;
+}
+function observeSteeringChatGptAssistantTurn() {
+  if (!isChatGptSafeMode() || !steeringAwaitingTurnCompletion) return false;
+  const baseline = steeringChatGptAssistantBaseline;
+  const current = getChatGptAssistantTurnSnapshot();
+  if (!baseline || !current) return false;
+  const advanced = current.count > baseline.count
+    || (
+      current.count >= baseline.count
+      && !!current.identity
+      && current.identity !== baseline.identity
+  );
+  if (!advanced) return false;
+  const now = Date.now();
+  if (!steeringChatGptAssistantObservedAt) {
+    steeringChatGptAssistantObservedAt = now;
+  }
+  if (current.finalized) {
+    steeringChatGptAssistantFinalizedAt = steeringChatGptAssistantFinalizedAt || now;
+  } else {
+    steeringChatGptAssistantFinalizedAt = 0;
+  }
+  if (!steeringObservedGenerationSinceSend) markSteeringGenerationObserved();
+  return true;
+}
+function isSteeringChatGptAssistantTurnStable(minStableMs = 250) {
+  if (!steeringChatGptAssistantBaseline) return true;
+  if (!steeringChatGptAssistantObservedAt) return false;
+  if (!steeringChatGptAssistantFinalizedAt) return false;
+  return Date.now() - steeringChatGptAssistantFinalizedAt >= Math.max(100, Number(minStableMs) || 250);
+}
 function isChatGptUnobservedSteeringTurnPending() {
   return !!(
     isChatGptSafeMode()
@@ -198,7 +263,14 @@ function recoverStaleSteeringTurnWait(reason = '') {
   } catch (_) {
     generatingNow = false;
   }
-  if (generatingNow) {
+  observeSteeringChatGptAssistantTurn();
+  const assistantTurnInProgress = !!(
+    isChatGptSafeMode()
+    && steeringChatGptAssistantBaseline
+    && !isSteeringChatGptAssistantTurnStable()
+    && (!chatGptLightGenerationWatchUntil || Date.now() < chatGptLightGenerationWatchUntil)
+  );
+  if (generatingNow || assistantTurnInProgress) {
     if (!isGenerating) {
       isGenerating = true;
       completionStatus = 'idle';
@@ -234,6 +306,7 @@ function armSteeringTurnCompletionWatchdog(ms = 0) {
 function clearSteeringTurnCompletionWait() {
   steeringAwaitingTurnCompletion = false;
   steeringObservedGenerationSinceSend = false;
+  clearSteeringChatGptAssistantObservation();
   clearSteeringTurnCompletionWatchdog();
 }
 function armSteeringAwaitingResponseStart(ms = 15000) {
@@ -243,7 +316,13 @@ function armSteeringAwaitingResponseStart(ms = 15000) {
     steeringAwaitingResponseStart = false;
     steeringAwaitingResponseTimer = null;
     scheduleCheck(true);
-    if (steeringAwaitingTurnCompletion) armSteeringTurnCompletionWatchdog(getSteeringTurnWatchdogDelayMs());
+    if (
+      steeringAwaitingTurnCompletion
+      && !steeringTurnCompletionWatchdogTimer
+      && !steeringTurnCompletionWatchdogStartedAt
+    ) {
+      armSteeringTurnCompletionWatchdog(getSteeringTurnWatchdogDelayMs());
+    }
     updateSteeringUi();
   }, Math.max(1500, ms));
 }
@@ -330,7 +409,7 @@ function isSteeringQueueBlocked() {
   return true;
 }
 function getSteeringResumeLabel() {
-  return '즉시 재개';
+  return '다음 보내기';
 }
 function clearSteeringCompletionOffer() {
   if (completionStatus === 'completed') {

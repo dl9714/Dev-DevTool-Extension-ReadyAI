@@ -468,7 +468,16 @@ function scheduleChatGptLightCompletionWatch(delay = 900) {
       scheduleChatGptLightCompletionWatch(document.hidden ? 1800 : 900);
       return;
     }
+    observeSteeringChatGptAssistantTurn();
     if (isGenerating && now - chatGptLightGenerationStartedAt >= 2200) {
+      if (
+        steeringAwaitingTurnCompletion
+        && steeringObservedGenerationSinceSend
+        && !isSteeringChatGptAssistantTurnStable()
+      ) {
+        scheduleChatGptLightCompletionWatch(document.hidden ? 1800 : 700);
+        return;
+      }
       const awaitingUnobservedSteeringTurn = !!(
         steeringAwaitingTurnCompletion
         && !steeringObservedGenerationSinceSend
@@ -562,7 +571,7 @@ var STEERING_AUTO_SEND_DELAY_MS = 1000;
 var STEERING_TURN_WATCHDOG_VISIBLE_MS = 12000;
 var STEERING_TURN_WATCHDOG_HIDDEN_MS = 20000;
 var READY_AI_CONTENT_VERSION = '2026-06-12.21-single-queue-dispatch';
-var READY_AI_CONTENT_BUILD_VERSION = '2026-06-12.34-wider-scrollbar-gutter';
+var READY_AI_CONTENT_BUILD_VERSION = '2026-08-02.25-dnd-favorite-toggle';
 var READY_AI_CANONICAL_EXTENSION_ID = 'deojggohikpfbhgdjbdogmkdgpkcighm';
 var readyAiDuplicateContentInstance = false;
 function getReadyAiExtensionId() {
@@ -755,6 +764,9 @@ var steeringAwaitingResponseStart = false;
 var steeringAwaitingResponseTimer = null;
 var steeringAwaitingTurnCompletion = false;
 var steeringObservedGenerationSinceSend = false;
+var steeringChatGptAssistantBaseline = null;
+var steeringChatGptAssistantObservedAt = 0;
+var steeringChatGptAssistantFinalizedAt = 0;
 var steeringTurnCompletionWatchdogTimer = null;
 var steeringTurnCompletionWatchdogStartedAt = 0;
 var steeringAttachmentRenderSignature = '';

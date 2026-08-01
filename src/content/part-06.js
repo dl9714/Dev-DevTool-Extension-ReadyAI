@@ -187,6 +187,11 @@ function renderSteeringQueue() {
     }
     const body = document.createElement('div');
     body.className = 'queue-body';
+    const itemMeta = document.createElement('div');
+    itemMeta.className = 'queue-item-meta';
+    const attachmentCount = getSteeringItemAttachmentCount(item);
+    itemMeta.textContent = attachmentCount ? `후속 ${index + 1} · 파일 ${attachmentCount}개` : `후속 ${index + 1} · 다음 작업`;
+    body.appendChild(itemMeta);
     const textEl = document.createElement('div');
     textEl.className = 'queue-text';
     textEl.textContent = getSteeringItemSummary(item);
@@ -251,13 +256,14 @@ function renderSteeringQueue() {
       });
       return btn;
     };
-    actions.appendChild(makeActionBtn('↑', '위로 이동', () => moveSteeringQueueItem(item.id, -1), isEditing ? 'hidden' : ''));
-    actions.appendChild(makeActionBtn('↓', '아래로 이동', () => moveSteeringQueueItem(item.id, 1), isEditing ? 'hidden' : ''));
     if (isEditing) {
       actions.appendChild(makeActionBtn('저장', '수정 저장', () => commitSteeringQueueEdit(), 'solid'));
       actions.appendChild(makeActionBtn('취소', '수정 취소', () => cancelSteeringQueueEdit(), 'muted'));
+    } else {
+      actions.appendChild(makeActionBtn('바로 반영', '현재 작업에 이 지시를 바로 반영', () => sendSteeringQueueItemImmediately(item.id), 'immediate'));
+      actions.appendChild(makeActionBtn('수정', '대기 내용 수정', () => beginSteeringQueueEdit(item.id), 'muted'));
     }
-    actions.appendChild(makeActionBtn('×', '대기 삭제', () => {
+    actions.appendChild(makeActionBtn('삭제', '대기 삭제', () => {
       steeringQueue = steeringQueue.filter((queued) => queued.id !== item.id);
       syncSteeringQueueEditState();
       setSteeringStatus(steeringQueue.length ? `${getSteeringQueueCountLabel()}` : '대기를 비웠습니다.');

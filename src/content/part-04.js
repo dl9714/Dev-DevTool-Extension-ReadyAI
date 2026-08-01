@@ -326,9 +326,11 @@ async function waitForSubmissionStart(composer, beforeText, timeout = 900, optio
     try { maybeRescanShadowRoots(); } catch (_) {}
     const current = String(getCurrentComposerText(composer) || '').trim();
     if (!current && baseline) return true;
-    try {
-      if (activeSite && detectGenerating(activeSite)) return true;
-    } catch (_) {}
+    if (!options.ignoreExistingGeneration) {
+      try {
+        if (activeSite && detectGenerating(activeSite)) return true;
+      } catch (_) {}
+    }
     try {
       if (!hadConversationTurns && typeof hasChatGptConversationTurns === 'function' && hasChatGptConversationTurns()) return true;
     } catch (_) {}

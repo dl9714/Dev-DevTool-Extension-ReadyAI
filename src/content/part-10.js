@@ -20,6 +20,7 @@ var STEERING_UI_MARKUP_TEMPLATE = `
               <div class="meta" id="ready-ai-steering-meta">대기중: 0</div>
             </div>
           </div>
+          <div class="maker-credit">Made by 라쿤솜사탕</div>
           <button class="icon-btn" type="button" id="ready-ai-steering-close" aria-label="접기">×</button>
         </div>
         <div class="title-edit-card">
@@ -33,7 +34,13 @@ var STEERING_UI_MARKUP_TEMPLATE = `
             <button class="title-btn subtle" type="button" id="ready-ai-steering-tab-title-clear">해제</button>
           </div>
         </div>
-        <textarea class="input" id="ready-ai-steering-input" placeholder="후속 지시 입력 · 파일/폴더 드래그 가능"></textarea>
+        <div class="composer-shell">
+          <textarea class="input" id="ready-ai-steering-input" placeholder="후속 지시를 입력하세요 · 파일/폴더 드래그 가능"></textarea>
+          <div class="shortcut-row" aria-label="후속 지시 단축키 안내">
+            <span><kbd>Enter</kbd> 다음 작업으로 대기</span>
+            <span><kbd>Ctrl/⌘ Enter</kbd> 현재 작업에 바로 반영</span>
+          </div>
+        </div>
         <div class="drop-shield" id="ready-ai-steering-drop-shield" hidden>여기에 놓으면 파일 첨부</div>
         <div class="template-wrap" id="ready-ai-steering-template-wrap">
           <div class="template-head">
@@ -59,9 +66,9 @@ var STEERING_UI_MARKUP_TEMPLATE = `
           <div class="attachment-hint" id="ready-ai-steering-attachment-hint"></div>
         </div>
         <div class="actions">
-          <button class="btn" type="button" id="ready-ai-steering-primary">Enter</button>
-          <button class="btn secondary" type="button" id="ready-ai-steering-send-now">지금전송</button>
-          <button class="btn subtle" type="button" id="ready-ai-steering-clear">전체비우기</button>
+          <button class="btn" type="button" id="ready-ai-steering-primary">후속 대기</button>
+          <button class="btn secondary" type="button" id="ready-ai-steering-send-now">바로 반영</button>
+          <button class="btn subtle" type="button" id="ready-ai-steering-clear">모두 비우기</button>
         </div>
         <div class="status" id="ready-ai-steering-status"></div>
         <div class="advanced-card" id="ready-ai-steering-advanced-card">
@@ -106,9 +113,9 @@ var STEERING_UI_MARKUP_TEMPLATE = `
       </div>
       <div class="queue-wrap" id="ready-ai-steering-queue-wrap">
         <div class="queue-head">
-          <div class="queue-label">대기 목록</div>
+          <div class="queue-label">후속 대기 · 위에서부터 차례로 실행</div>
           <div class="queue-head-actions">
-            <button class="queue-head-btn" type="button" id="ready-ai-steering-run-next">즉시 재개</button>
+            <button class="queue-head-btn" type="button" id="ready-ai-steering-run-next">다음 보내기</button>
             <button class="queue-head-btn danger" type="button" id="ready-ai-steering-clear-queue">모두 삭제</button>
           </div>
         </div>
@@ -398,19 +405,7 @@ function bindSteeringUiEvents() {
     submitSteeringInput();
   }));
   steeringRefs.sendNow.addEventListener('click', consume(async () => {
-    const refs = ensureSteeringUi();
-    const text = String(refs?.input?.value || '').trim();
-    const files = cloneSteeringAttachmentsForQueue();
-    if (text || files.length) {
-      enqueueSteeringPrompt(text, { files });
-      setSteeringDraftText('');
-      try { refs.input.value = ''; } catch (_) {}
-      clearSteeringDraftAttachments();
-    }
-    const ok = canUserRunSteeringQueueNow()
-      ? await processSteeringQueue({ source: 'manual' })
-      : false;
-    if (!ok) setSteeringStatus(getSteeringQueueWaitMessage(), !steeringQueue.length);
+    await sendSteeringDraftImmediately();
   }));
   steeringRefs.clear.addEventListener('click', consume(() => {
     clearSteeringQueue(true);
@@ -510,6 +505,10 @@ function bindSteeringUiEvents() {
     }
     if (event.key !== 'Enter' || event.shiftKey) return;
     try { event.preventDefault(); } catch (_) {}
+    if (event.ctrlKey || event.metaKey) {
+      sendSteeringDraftImmediately();
+      return;
+    }
     submitSteeringInput();
   });
 }
