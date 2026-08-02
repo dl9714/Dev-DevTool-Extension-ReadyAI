@@ -4,14 +4,14 @@
 
 Ready_Ai must not run two active unpacked copies against ChatGPT. On this PC the duplicate ids observed were:
 
-- Canonical repo extension: `deojggohikpfbhgdjbdogmkdgpkcighm`
+- Canonical repo extension: `jmgnmeaiahlpbbgnocmognokfecofkma`
 - Older mirrored-path extension: `ajnolilmicdilijebljgchoodgajnfeg`
 
 If both are enabled, each extension has its own isolated content world and background worker. They can both inject the same UI id, send `force_check`, process the same follow-up queue, and make Chrome freeze when multiple ChatGPT tabs are open.
 
 Do not remove the page-level ownership guard in the content script. Duplicate Ready_Ai instances must yield before creating `#ready-ai-steering-host`, before running heavy status checks, and before processing follow-up queue messages.
 
-Do not remove the background passive-duplicate guard. On this PC the legacy mirror id `ajnolilmicdilijebljgchoodgajnfeg` must not run tab injection, queue probe, Gemini probe, or ChatGPT bootstrap handling while the canonical id `deojggohikpfbhgdjbdogmkdgpkcighm` exists. Otherwise two service workers can race on the same ChatGPT tabs even when the page-level UI guard works.
+Do not remove the background passive-duplicate guard. On this PC the legacy mirror id `ajnolilmicdilijebljgchoodgajnfeg` must not run tab injection, queue probe, Gemini probe, or ChatGPT bootstrap handling while the canonical id `jmgnmeaiahlpbbgnocmognokfecofkma` exists. Otherwise two service workers can race on the same ChatGPT tabs even when the page-level UI guard works.
 
 Do not bump `READY_AI_CONTENT_VERSION` just to mark a build. That string is the background/content compatibility handshake. Bumping it while Chrome still has an older service worker alive causes repeated `chrome.scripting.executeScript` reinjection and can make multiple ChatGPT tabs freeze. Use `READY_AI_CONTENT_BUILD_VERSION` for build identity instead.
 
@@ -37,6 +37,12 @@ Do not bump `READY_AI_CONTENT_VERSION` just to mark a build. That string is the 
 2. 숫자는 작은 위첨자나 대괄호 없이 일반 크기 숫자만 사용해서 가독성을 우선한다.
 3. 색 배지 바로 오른쪽에 `N` 형태로 공백 없이 붙여서 최대한 짧고 선명하게 보이게 한다.
 
+### Google AI 제목 안전 모드
+1. Gemini와 AI Studio에서는 `document.title`을 지속적으로 감시하거나 되쓰지 않는다.
+2. Google 페이지가 새 채팅 제목을 정하는 동안 확장 제목 guard가 맞물리면 렌더러 CPU/RAM이 폭증할 수 있으므로, 이 두 사이트의 상태 이모지는 후속 지시 패널 안에서만 유지한다.
+3. 후속 지시 대기열, 생성 감지, 완료 후 자동 전송은 제목 처리와 독립적으로 계속 동작해야 한다.
+4. Google AI 편집기는 페이지 메인 영역에서 편집기 모델을 갱신하고, 입력창과 가장 가까운 정확한 보내기 버튼을 사용한다. `debugger` 권한은 다른 Chrome 제어 확장과 충돌하고 자동화 세션을 끊을 수 있으므로 사용하지 않는다.
+
 ## 2. 후속 지시 규칙
 
 ### 런처 문구
@@ -60,17 +66,19 @@ Do not bump `READY_AI_CONTENT_VERSION` just to mark a build. That string is the 
 3. ChatGPT가 응답 생성 중이면 후속 지시 패널의 열림/닫힘과 관계없이, ChatGPT 기본 입력창의 Enter는 현재 입력을 후속 지시 대기열에 넣는다. Shift+Enter 줄바꿈과 Ctrl/Cmd+Enter 즉시 반영은 그대로 유지한다.
 4. `바로 반영`은 기존 대기 항목을 한꺼번에 보내거나 순서를 바꾸면 안 된다. 선택한 입력 또는 선택한 대기 항목 하나만 전송한다.
 5. 사용자가 입력한 후속 지시는 여러 개 대기열에 쌓을 수 있어야 한다.
+   - Ctrl/Cmd+Enter 직후의 다음 Enter도 버리면 안 된다. 물리 키 반복은 `event.repeat`으로 막고, 서로 다른 후속 지시는 0.16초 이후부터 연속 입력을 허용한다.
 6. GPT가 현재 아무 일도 하지 않는 초기 상태에서도 첫 후속 지시는 바로 전송될 수 있어야 한다.
 7. 후속 지시는 한 번에 하나씩만 전송하고, 전송이 성공하면 대기열에서 자동으로 하나씩 사라져야 한다.
 8. 후속 지시 전송이 시작되면 응답 시작 전까지는 다음 후속 지시가 바로 연속 전송되지 않도록 막아야 한다.
 9. GPT 답변 완료 후 1초 뒤 대기열의 다음 후속 지시를 자동 전송한다.
 10. 대기 목록과 대기 문구는 카드 내부가 아니라 카드 위 영역에 표시해서 카드 위치를 흔들지 않아야 한다.
 11. 전송 버튼 탐지에 실패해도 주변 제출 버튼, form submit, Enter 전송을 순서대로 시도해야 한다.
+    - Gemini에서는 이전 답변의 `다시 실행`을 보내기 버튼으로 오인하면 안 된다. `보내기/전송` 라벨을 우선하고 재실행·재생성·retry 계열을 제외한 뒤 실제 입력창에 가장 가까운 버튼을 선택한다.
 12. `다음 보내기`는 GPT가 생성 중이거나 방금 보낸 응답의 시작/완료 확인을 기다리는 동안 후속대기 게이트를 우회하면 안 된다.
 13. `바로 반영`만 사용자의 명시적인 현재 작업 조정 동작으로 게이트를 우회할 수 있다. 나머지 대기 항목은 ChatGPT가 전송 가능한 상태가 된 뒤 일반 큐 처리기로 하나씩 보내야 한다.
 14. 각 대기 항목은 편집, 드래그 순서 변경, 바로 반영, 삭제를 제공해야 한다.
 15. 대기열이 길어져도 패널 상단이 viewport 밖으로 잘리면 안 된다. 큐 높이는 스크롤로 제한하고, 필요한 경우 카드 내부 높이를 줄여서 처리한다.
-16. `후속 지시 열기/닫기` 런처는 패널 열림, 닫힘, 대기열 표시 여부와 무관하게 같은 viewport 위치에 머물러야 한다. 상단 잘림은 host 위치를 움직이지 말고 카드/큐 높이 제한으로 해결한다.
+16. `후속 지시 열기/닫기` 런처는 일반적으로 같은 viewport 위치에 머문다. 다만 Gemini처럼 실제 입력창이 화면 중앙에 있고 열린 카드 전체가 위쪽 viewport를 넘는 경우에는, 클릭할 수 없는 영역을 만들지 않도록 열린 패널 묶음만 필요한 만큼 아래로 맞춘다. 패널을 닫으면 런처는 원래 입력창 기준 위치로 즉시 돌아간다.
 17. `ChatGPT 후속 대기` 카드 자체에는 세로/가로 스크롤바를 만들지 않는다. 스크롤은 대기 목록에만 허용하고, 카드 높이 문제는 입력창/파일 드롭 영역을 더 슬림하게 줄여 해결한다.
 18. ChatGPT 페이지 오른쪽 스크롤바와 후속 지시 패널 오른쪽 끝이 겹치면 안 된다. ChatGPT에서는 패널을 스크롤바에서 소폭 왼쪽으로 띄운다.
 19. ChatGPT가 생성 중일 때 대기 항목의 `바로 반영`은 현재 응답을 중지 버튼으로 끊으면 안 된다. 선택한 항목을 ChatGPT 기본 입력창에 반영하고 실제 Ctrl/Cmd+Enter와 같은 현재 작업 조정 경로만 사용해야 한다. 이 경로를 확인하지 못하면 일반 Enter로 폴백해 ChatGPT의 다음 대기열에 넣지 않고 Ready_Ai 대기 항목을 그대로 보존한다. 일반 자동 대기열 전송에는 이 우회 경로를 적용하지 않는다.

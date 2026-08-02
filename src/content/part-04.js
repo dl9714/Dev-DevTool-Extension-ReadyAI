@@ -291,6 +291,12 @@ function setControlValue(el, value) {
   }
   if (el.isContentEditable) {
     try {
+      const siteKey = typeof getSiteKey === 'function' ? getSiteKey() : '';
+      const googleRichEditor = siteKey === 'gemini' && el.matches?.('.ql-editor, rich-textarea [contenteditable="true"]');
+      // Gemini의 Quill 루트를 isolated world에서 직접 다시 쓰면 내부 문서 모델과
+      // DOM이 어긋나 렌더러가 재조정을 반복할 수 있다. Google 입력은 background의
+      // trusted Input.insertText 경로만 사용하고 여기서는 안전하게 중단한다.
+      if (googleRichEditor) return false;
       const selection = window.getSelection?.();
       const range = document.createRange();
       range.selectNodeContents(el);

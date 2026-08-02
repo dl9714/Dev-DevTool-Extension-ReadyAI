@@ -31,24 +31,29 @@ function getTitleBadgeStateKey() {
 function getTitleBadgeCountGlyph() {
   if (!titleBadgeCountEnabled) return '';
   if (!steeringQueue.length) return '';
+  // Gemini/AI Studio는 페이지 자체가 document.title을 적극적으로 다시 쓴다.
+  // 대기 수가 바뀔 때마다 제목 접두사를 다시 쓰면 양쪽 MutationObserver가
+  // 맞물려 렌더러가 과부하될 수 있으므로 상태 이모지는 유지하고 숫자만 뺀다.
+  const siteKey = getSiteKey();
+  if (siteKey === 'gemini' || siteKey === 'aistudio') return '';
   return `${getSteeringQueueCountText()}`;
 }
 // background(frame 합산) 쪽에서 stale frame을 안 남기기 위해
-// content는 주기적으로(기본 5s) 상태를 heartbeat로 보내준다.
+// content는 주기적으로(기본 30s) 상태를 heartbeat로 보내준다.
 var HEARTBEAT_MS = 30000;
 var _lastHeartbeatAt = 0;
 // ===== 백그라운드 탭에서도 완료 감지(특히 Gemini) =====
 // - Gemini는 DOM 변경이 childList가 아니라 attributes/style로만 일어나는 경우가 있어
 //   MutationObserver(childList)만으로는 "중지 버튼 사라짐"을 못 잡고 🟠가 유지될 수 있음.
 // - 따라서 attributes 감시 + 주기 폴링(setInterval)을 같이 사용한다.
-var CHECK_INTERVAL_ACTIVE_MS = 450;
-var CHECK_INTERVAL_VISIBLE_IDLE_MS = 1200;
-var CHECK_INTERVAL_HIDDEN_ACTIVE_MS = 1400;
-var CHECK_INTERVAL_HIDDEN_IDLE_MS = 30000;
-var MIN_CHECK_GAP_ACTIVE_MS = 300;
-var MIN_CHECK_GAP_IDLE_MS = 420;
-var MIN_CHECK_GAP_HIDDEN_ACTIVE_MS = 900;
-var MIN_CHECK_GAP_HIDDEN_IDLE_MS = 1200;
+var CHECK_INTERVAL_ACTIVE_MS = 650;
+var CHECK_INTERVAL_VISIBLE_IDLE_MS = 3000;
+var CHECK_INTERVAL_HIDDEN_ACTIVE_MS = 1800;
+var CHECK_INTERVAL_HIDDEN_IDLE_MS = 60000;
+var MIN_CHECK_GAP_ACTIVE_MS = 400;
+var MIN_CHECK_GAP_IDLE_MS = 1000;
+var MIN_CHECK_GAP_HIDDEN_ACTIVE_MS = 1200;
+var MIN_CHECK_GAP_HIDDEN_IDLE_MS = 3000;
 var _checkScheduled = false;
 var _checkTimer = null;
 var _lastCheckAt = 0;
@@ -62,6 +67,21 @@ function isChatGptSafeMode() {
   try {
     const host = String(location.hostname || '').toLowerCase();
     return host === 'chatgpt.com' || host.endsWith('.chatgpt.com') || host === 'chat.openai.com';
+  } catch (_) {
+    return false;
+  }
+}
+// Gemini/AI Studio는 새 대화가 시작될 때 페이지 제목을 여러 번 갱신한다.
+// 확장이 접두사를 계속 되쓰면 Google의 제목 동기화와 맞물려 렌더러가
+// 폭주할 수 있으므로, 두 사이트에서는 상태를 패널에만 표시한다.
+function isGoogleAiTitleSafeMode() {
+  try {
+    const siteKey = getSiteKey?.();
+    if (siteKey === 'gemini' || siteKey === 'aistudio') return true;
+  } catch (_) {}
+  try {
+    const host = String(location.hostname || '').toLowerCase();
+    return host === 'gemini.google.com' || host === 'aistudio.google.com';
   } catch (_) {
     return false;
   }
@@ -220,28 +240,26 @@ function setDeepEnabled(on) {
 function attachObserver(root) {
   if (!root) return;
   if (_deepObservers.has(root)) return;
-  const obs = new MutationObserver((mutationList) => {
-    // 새로 생긴 shadowRoot를 추가로 등록
-    for (const m of mutationList) {
-      if (m.addedNodes && m.addedNodes.length) {
-        for (const n of m.addedNodes) {
-          scanTreeForShadowRoots(n);
-        }
-      }
-    }
+  const obs = new MutationObserver(() => {
+    // 새 shadowRoot 탐색은 상태 폴링의 제한된 재스캔에서 수행한다.
+    // 응답 스트리밍마다 추가된 전체 서브트리를 순회하지 않는다.
     scheduleCheck();
   });
   // Document/ShadowRoot 모두 observe 가능
   try {
     const target = root === document ? document.body : root;
     if (!target) return;
-    obs.observe(target, {
+    const observeOptions = {
       childList: true,
       subtree: true,
       attributes: true,
-      // Gemini는 style/class/aria-label 변경만으로 UI가 바뀌기도 함
-      attributeFilter: ['aria-label', 'style', 'class', 'hidden', 'disabled', 'aria-disabled']
-    });
+      // document 전체에서는 자주 바뀌는 style/class를 제외하고,
+      // 실제 shadowRoot 내부에서만 세부 속성을 감시한다.
+      attributeFilter: root === document
+        ? ['aria-label', 'hidden', 'disabled', 'aria-disabled']
+        : ['aria-label', 'style', 'class', 'hidden', 'disabled', 'aria-disabled'],
+    };
+    obs.observe(target, observeOptions);
     _deepObservers.set(root, obs);
   } catch (_) {
     // observe 실패 시(특정 root가 더 이상 유효하지 않은 경우 등) 무시
@@ -281,6 +299,14 @@ function maybeRescanShadowRoots() {
   const minGap = (document.hidden && !isGenerating) ? SHADOW_RESCAN_HIDDEN_IDLE_MS : SHADOW_RESCAN_MS;
   if (now - _lastShadowRescanAt < minGap) return;
   _lastShadowRescanAt = now;
+  for (const root of Array.from(_deepRoots)) {
+    if (root === document) continue;
+    const host = root?.host;
+    if (host?.isConnected) continue;
+    try { _deepObservers.get(root)?.disconnect?.(); } catch (_) {}
+    _deepObservers.delete(root);
+    _deepRoots.delete(root);
+  }
   try {
     scanTreeForShadowRoots(document.documentElement);
   } catch (_) {}
@@ -317,12 +343,11 @@ function resetDeepRoots() {
 function qsa(selector) {
   if (_statusQueryCache?.has(selector)) return _statusQueryCache.get(selector);
   let result = [];
-  // deep roots가 활성화되어 있으면(오픈 shadowRoot 포함) 우선 사용
-  try {
-    const deep = deepQuerySelectorAll(selector);
-    if (deep && deep.length) result = deep;
-  } catch (_) {}
-  if (!result.length) {
+  // deep roots에는 document 자체도 포함된다. 결과가 0개여도 document를
+  // 다시 한 번 질의하지 않아 유휴 상태의 중복 selector 탐색을 막는다.
+  if (_deepEnabled && _deepRoots.size) {
+    try { result = deepQuerySelectorAll(selector); } catch (_) { result = []; }
+  } else {
     try {
       result = Array.from(document.querySelectorAll(selector));
     } catch (_) {

@@ -1,6 +1,7 @@
 function applyDesiredDocumentTitle(force = false) {
   if (!monitoring) return;
   if (!IS_TOP_FRAME) return;
+  if (isGoogleAiTitleSafeMode()) return;
   if (typeof isReadyAiDuplicateContentInstance === 'function' && isReadyAiDuplicateContentInstance()) return;
   if (!isChatGptSafeMode()) publishTitleGuardState({ force });
   const currentTitle = String(document.title || '');
@@ -21,6 +22,7 @@ function applyDesiredDocumentTitle(force = false) {
 function queueDesiredDocumentTitleSync(force = false) {
   if (!monitoring) return;
   if (!IS_TOP_FRAME) return;
+  if (isGoogleAiTitleSafeMode()) return;
   if (!isChatGptSafeMode()) publishTitleGuardState({ force });
   titleSyncQueuedForce = titleSyncQueuedForce || !!force;
   if (titleSyncQueued) return;
@@ -33,10 +35,11 @@ function queueDesiredDocumentTitleSync(force = false) {
   });
 }
 function getTitleBadgeStabilityIntervalMs() {
-  return document.hidden ? 220 : 80;
+  return document.hidden ? 750 : 250;
 }
 function armTitleBadgeStabilityWindow(ms = 1800) {
   if (isChatGptSafeMode()) return;
+  if (isGoogleAiTitleSafeMode()) return;
   if (!monitoring) return;
   if (!IS_TOP_FRAME) return;
   if (!titleBadgeEnabled) return;
@@ -104,6 +107,7 @@ function ensureTitleGuardMessageBridge() {
 }
 function requestTitleGuardInstall() {
   if (isChatGptSafeMode()) return;
+  if (isGoogleAiTitleSafeMode()) return;
   if (!IS_TOP_FRAME) return;
   ensureTitleGuardMessageBridge();
   if (titleGuardInstalled || titleGuardInstallInFlight) return;
@@ -126,6 +130,7 @@ function requestTitleGuardInstall() {
   }
 }
 function scheduleTitleGuardInstallRetry() {
+  if (isGoogleAiTitleSafeMode()) return;
   if (!monitoring || !IS_TOP_FRAME || titleGuardInstalled) return;
   if (titleGuardInstallRetryTimer) return;
   titleGuardInstallRetryTimer = setTimeout(() => {
@@ -135,6 +140,7 @@ function scheduleTitleGuardInstallRetry() {
   }, 900);
 }
 function scheduleTitleGuardStateRetry() {
+  if (isGoogleAiTitleSafeMode()) return;
   if (!monitoring || !IS_TOP_FRAME || !titleBadgeEnabled) return;
   if (titleGuardLastAckSeq >= titleGuardStateSeq) return;
   if (!titleGuardStateRetryUntil) titleGuardStateRetryUntil = Date.now() + 5000;
@@ -160,6 +166,31 @@ function scheduleTitleGuardStateRetry() {
 function publishTitleGuardState(options = {}) {
   if (isChatGptSafeMode()) return;
   if (!IS_TOP_FRAME) return;
+  if (isGoogleAiTitleSafeMode()) {
+    // 확장 새로고침 전 페이지에 남아 있는 구형 main-world guard도 해제한다.
+    titleGuardStateSignature = 'google-ai-title-safe-mode';
+    titleGuardStateRetryUntil = 0;
+    if (titleGuardInstallRetryTimer) {
+      try { clearTimeout(titleGuardInstallRetryTimer); } catch (_) {}
+      titleGuardInstallRetryTimer = null;
+    }
+    if (titleGuardStateRetryTimer) {
+      try { clearTimeout(titleGuardStateRetryTimer); } catch (_) {}
+      titleGuardStateRetryTimer = null;
+    }
+    try {
+      window.postMessage({
+        source: 'Ready_Ai',
+        type: 'ready_ai_title_guard_state',
+        enabled: false,
+        prefix: '',
+        customBaseTitle: '',
+        fallbackBaseTitle: '',
+        seq: Math.max(1, ++titleGuardStateSeq),
+      }, '*');
+    } catch (_) {}
+    return;
+  }
   ensureTitleGuardMessageBridge();
   const enabled = Object.prototype.hasOwnProperty.call(options, 'enabled')
     ? !!options.enabled
@@ -212,6 +243,7 @@ function syncNativePageTitleFromDocumentTitle() {
 function reconcileDesiredDocumentTitleFromMutation() {
   if (!monitoring) return;
   if (!IS_TOP_FRAME) return;
+  if (isGoogleAiTitleSafeMode()) return;
   syncNativePageTitleFromDocumentTitle();
   const currentTitle = String(document.title || '');
   const targetTitle = computeDesiredDocumentTitle(currentTitle);
@@ -223,6 +255,7 @@ function reconcileDesiredDocumentTitleFromMutation() {
 }
 function ensureTitleSyncObserver() {
   if (isChatGptSafeMode()) return;
+  if (isGoogleAiTitleSafeMode()) return;
   if (!IS_TOP_FRAME) return;
   if (titleSyncObserver) return;
   const target = document.head || document.documentElement;
@@ -247,6 +280,10 @@ function disconnectTitleSyncObserver() {
 }
 function updateTitleBadge() {
   if (isReadyAiDuplicateContentInstance()) return;
+  if (isGoogleAiTitleSafeMode()) {
+    publishTitleGuardState({ enabled: false });
+    return;
+  }
   if (!isChatGptSafeMode()) requestTitleGuardInstall();
   applyDesiredDocumentTitle();
 }
@@ -262,6 +299,7 @@ function getTitleBadgeUiSyncSignature() {
 }
 function syncTitleBadgeFromUiRender(force = false) {
   if (!monitoring || !IS_TOP_FRAME) return;
+  if (isGoogleAiTitleSafeMode()) return;
   if (isReadyAiDuplicateContentInstance()) return;
   const now = Date.now();
   const signature = getTitleBadgeUiSyncSignature();
@@ -274,6 +312,7 @@ function syncTitleBadgeFromUiRender(force = false) {
 }
 function syncTitleBadgeFromStatusLoop(force = false) {
   if (isChatGptSafeMode()) return;
+  if (isGoogleAiTitleSafeMode()) return;
   if (!monitoring || !IS_TOP_FRAME) return;
   if (isReadyAiDuplicateContentInstance()) return;
   const now = Date.now();
@@ -285,6 +324,10 @@ function syncTitleBadgeFromStatusLoop(force = false) {
 function clearTitleBadge() {
   if (!IS_TOP_FRAME) return;
   if (typeof isReadyAiDuplicateContentInstance === 'function' && isReadyAiDuplicateContentInstance()) return;
+  if (isGoogleAiTitleSafeMode()) {
+    publishTitleGuardState({ enabled: false, force: true });
+    return;
+  }
   if (!isChatGptSafeMode()) publishTitleGuardState({ enabled: false, force: true });
   const cleanTitle = hasCustomTabTitle() ? normalizeCustomTabTitle(customTabTitle) : getDesiredBaseTitle(getCleanDocumentTitleText());
   try { document.title = cleanTitle; } catch (_) {}
@@ -366,7 +409,7 @@ function scheduleChatGptLightTitleBadgeSync(delay = 0) {
 function armChatGptLightTitleBadgeBurst() {
   if (!isChatGptSafeMode() || !monitoring || !IS_TOP_FRAME) return;
   clearChatGptLightTitleBadgeBurst();
-  const delays = [0, 80, 240, 600, 1200, 2400, 4800];
+  const delays = [0, 160, 600, 1800, 4800];
   for (const delay of delays) {
     const timer = setTimeout(() => runChatGptLightTitleBadgeSync(), delay);
     chatGptLightTitleBadgeBurstTimers.push(timer);
@@ -385,8 +428,8 @@ function startChatGptLightTitleBadgeKeepAlive() {
   if (chatGptLightTitleBadgeKeepAliveTimer) return;
   const getDelay = () => {
     const active = isFastStatusCheckWindow() || getSteeringQueueCountValue() > 0;
-    if (document.hidden) return active ? 7000 : 30000;
-    return active ? 1600 : 5000;
+    if (document.hidden) return active ? 10000 : 60000;
+    return active ? 3000 : 15000;
   };
   const tick = () => {
     chatGptLightTitleBadgeKeepAliveTimer = null;
@@ -571,8 +614,8 @@ var STEERING_AUTO_SEND_DELAY_MS = 1000;
 var STEERING_TURN_WATCHDOG_VISIBLE_MS = 12000;
 var STEERING_TURN_WATCHDOG_HIDDEN_MS = 20000;
 var READY_AI_CONTENT_VERSION = '2026-06-12.21-single-queue-dispatch';
-var READY_AI_CONTENT_BUILD_VERSION = '2026-08-02.25-dnd-favorite-toggle';
-var READY_AI_CANONICAL_EXTENSION_ID = 'deojggohikpfbhgdjbdogmkdgpkcighm';
+var READY_AI_CONTENT_BUILD_VERSION = '2026-08-02.69-bottom-composer-safe';
+var READY_AI_CANONICAL_EXTENSION_ID = 'jmgnmeaiahlpbbgnocmognokfecofkma';
 var readyAiDuplicateContentInstance = false;
 function getReadyAiExtensionId() {
   try {

@@ -22,8 +22,8 @@
 ## Findings
 
 - No actionable P0, P1, or P2 findings remain.
-- [P3] The generated concept used larger decorative status icons. The production popup uses live numeric status cells without those extra icons so all controls remain readable in Chrome's fixed `600px` popup height.
-- [P3] The version pill reads `0.2.59`, intentionally newer than the `0.2.58` concept reference.
+- The four live status cells retain the concept's distinct list, play, check, and clock icons while remaining within Chrome's fixed `600px` popup height.
+- The version pill reads `0.3.9`, intentionally newer than the `0.2.58` concept reference.
 
 ## Comparison history
 

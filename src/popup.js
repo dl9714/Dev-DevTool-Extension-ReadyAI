@@ -26,7 +26,7 @@ const POPUP_FAVORITE_ITEMS = Object.freeze({
   templates: { title: '후속 지시 템플릿', icon: 'message.svg', sheet: 'steering-sheet', anchor: 'steering-templates-section' },
   titles: { title: '탭 이름과 현황', icon: 'window.svg', sheet: 'title-manager-sheet' },
   advanced: { title: '고급 설정', icon: 'settings.svg', sheet: 'advanced-sheet' },
-  utilities: { title: '백업과 이력', icon: 'shield-off.svg', sheet: 'advanced-sheet', anchor: 'advanced-data-tools-section' },
+  utilities: { title: '데이터 관리', icon: 'settings.svg', sheet: 'advanced-sheet', anchor: 'advanced-data-tools-section' },
   gemini: { title: 'Gemini 감지', icon: 'bell.svg', sheet: 'builtin-sites-sheet', anchor: 'site-gemini-section' },
 });
 const DEFAULT_POPUP_FAVORITES = Object.freeze(['alerts', 'steering', 'dnd']);

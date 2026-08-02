@@ -207,6 +207,38 @@ function requestChatGptNativeImmediateSteer(text, timeoutMs = 5200) {
     }
   });
 }
+function requestGoogleNativeSteer(text, timeoutMs = 9000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      try {
+        document.documentElement?.setAttribute?.('data-ready-ai-last-google-steer-stage', String(result?.stage || result?.route || 'none'));
+        document.documentElement?.setAttribute?.('data-ready-ai-last-google-steer-result', result?.ok ? 'ok' : 'fail');
+        document.documentElement?.setAttribute?.('data-ready-ai-last-google-steer-after', String(result?.after || '').slice(0, 240));
+        document.documentElement?.setAttribute?.('data-ready-ai-last-google-background-build', String(result?.readyAiBackgroundBuildVersion || 'unknown'));
+      } catch (_) {}
+      resolve(result || { ok: false, sent: false, retryable: true, message: 'Google AI 전송 결과를 확인하지 못했습니다.' });
+    };
+    const timer = setTimeout(() => finish({ ok: false, sent: false, retryable: true, message: 'Google AI 실제 입력 경로 확인 시간이 초과되었습니다.' }), Math.max(15000, Number(timeoutMs) || 15000));
+    try {
+      chrome.runtime.sendMessage({ action: 'google_native_steer', text: String(text || '') }, (response) => {
+        try { clearTimeout(timer); } catch (_) {}
+        try {
+          if (chrome.runtime.lastError) {
+            finish({ ok: false, sent: false, retryable: true, message: chrome.runtime.lastError.message || 'Google AI 실제 입력 요청을 보내지 못했습니다.' });
+            return;
+          }
+        } catch (_) {}
+        finish(response || { ok: false, sent: false, retryable: true, message: 'Google AI 실제 입력 요청 결과를 받지 못했습니다.' });
+      });
+    } catch (err) {
+      try { clearTimeout(timer); } catch (_) {}
+      finish({ ok: false, sent: false, retryable: true, message: err?.message || 'Google AI 실제 입력 요청을 보내지 못했습니다.' });
+    }
+  });
+}
 async function sendSteeringPromptText(text, options = {}) {
   const composer = getActiveComposer();
   if (!composer) {
@@ -234,6 +266,33 @@ async function sendSteeringPromptText(text, options = {}) {
   suppressComposerAcknowledge(1700);
   const existingText = options.replaceComposerText ? '' : getCurrentComposerText(composer);
   const mergedText = mergeSteeringText(existingText, text);
+  const siteKey = getSiteKey();
+  if (siteKey === 'gemini' || siteKey === 'aistudio') {
+    if (!mergedText && !files.length) {
+      return { ok: false, sent: false, message: '보낼 내용이 없습니다.' };
+    }
+    const googleResult = await requestGoogleNativeSteer(mergedText, Math.max(16000, Number(options.submitStartTimeoutMs) || 0));
+    if (googleResult?.ok && googleResult?.sent) return googleResult;
+    // Gemini sometimes paints/enables its send button a moment after an image
+    // response completes.  The main-world route may have already populated the
+    // editor, so finish that exact submission without rewriting the draft.
+    const expected = String(mergedText || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+    const fallbackDeadline = Date.now() + 2600;
+    while (Date.now() <= fallbackDeadline) {
+      const liveComposer = getActiveComposer() || composer;
+      const current = String(getCurrentComposerText(liveComposer) || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+      if (current !== expected) break;
+      const sendButton = getActiveSendButton() || findNearbySendButton(liveComposer);
+      if (sendButton && isEnabledButtonLike(sendButton)) {
+        const sent = await tryTriggerComposerSend(liveComposer, () => {
+          try { sendButton.click(); return true; } catch (_) { return false; }
+        }, { submitStartTimeoutMs: 2400, ignoreExistingGeneration: !!options.ignoreExistingGeneration });
+        if (sent) return { ok: true, sent: true, route: 'google_delayed_send_button', message: '전송했습니다.' };
+      }
+      await waitForSteeringTick(120);
+    }
+    return googleResult;
+  }
   if (mergedText) {
     const filled = setControlValue(composer, mergedText);
     if (!filled) {
@@ -254,6 +313,51 @@ async function sendSteeringPromptText(text, options = {}) {
     await waitForSteeringTick(180);
   }
   if (options.requireNativeImmediateSteer && getSiteKey() === 'chatgpt') {
+    const stopSelector = '[data-testid="stop-button"],button[aria-label*="Stop"],button[aria-label*="stop"],button[aria-label*="중지"],button[data-testid*="stop"]';
+    const stopButton = Array.from(document.querySelectorAll(stopSelector)).find((candidate) => {
+      try {
+        const rect = candidate.getBoundingClientRect();
+        const style = getComputedStyle(candidate);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      } catch (_) {
+        return false;
+      }
+    }) || null;
+    if (stopButton) {
+      try { stopButton.click(); } catch (_) {}
+      const stopDeadline = Date.now() + 2600;
+      while (Date.now() <= stopDeadline) {
+        const stillStopping = Array.from(document.querySelectorAll(stopSelector)).some((candidate) => {
+          try {
+            const rect = candidate.getBoundingClientRect();
+            const style = getComputedStyle(candidate);
+            return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+          } catch (_) {
+            return false;
+          }
+        });
+        if (!stillStopping) break;
+        await waitForSteeringTick(80);
+      }
+      if (String(getCurrentComposerText(composer) || '').trim() !== String(mergedText || '').trim()) {
+        setControlValue(composer, mergedText);
+        await waitForSteeringComposerText(composer, mergedText, 1200);
+      }
+      const submittedAfterInterrupt = await tryTriggerComposerSend(
+        composer,
+        () => {
+          const sendButton = getActiveSendButton() || findNearbySendButton(composer);
+          if (sendButton) {
+            try { sendButton.click(); return true; } catch (_) {}
+          }
+          return requestSubmitComposer(composer);
+        },
+        { submitStartTimeoutMs: Math.min(2600, Math.max(1200, Number(options.nativeImmediateTimeoutMs) || 2200)) }
+      );
+      if (submittedAfterInterrupt) {
+        return { ok: true, sent: true, immediate: true, route: 'chatgpt_interrupt_then_send', message: '현재 작업을 조정해 즉시 반영했습니다.' };
+      }
+    }
     const immediateResult = await requestChatGptNativeImmediateSteer(mergedText, options.nativeImmediateTimeoutMs);
     if (immediateResult?.ok && immediateResult?.immediate) {
       return { ok: true, sent: true, immediate: true, route: immediateResult.route, message: '현재 작업에 즉시 반영했습니다.' };
@@ -353,7 +457,11 @@ async function sendSteeringItemImmediately(item, options = {}) {
       requireNativeImmediateSteer: !!(
         generatingNow
         && getSiteKey() === 'chatgpt'
-        && (options.source === 'queued_steer_now' || options.source === 'draft_steer_now')
+        && (
+          options.source === 'queued_steer_now'
+          || options.source === 'draft_steer_now'
+          || options.source === 'native_chatgpt_composer_steer_now'
+        )
       ),
       nativeImmediateTimeoutMs: 5200,
       submitStartTimeoutMs: Math.max(700, Number(options.submitStartTimeoutMs) || (generatingNow ? 4200 : 3500)),
@@ -369,9 +477,19 @@ async function sendSteeringItemImmediately(item, options = {}) {
       syncSteeringQueueEditState();
     }
     if (options.clearDraft) {
-      setSteeringDraftText('');
-      try { if (steeringRefs?.input) steeringRefs.input.value = ''; } catch (_) {}
-      clearSteeringDraftAttachments();
+      // Sending can take a few hundred milliseconds on Google AI.  Do not let
+      // the completion of an older send erase a follow-up the user typed while
+      // that request was in flight.
+      const liveDraftText = String(steeringRefs?.input?.value || '');
+      if (liveDraftText.trim() === text) {
+        setSteeringDraftText('');
+        try { if (steeringRefs?.input) steeringRefs.input.value = ''; } catch (_) {}
+      } else {
+        setSteeringDraftText(liveDraftText);
+      }
+      const draftAttachmentsUnchanged = steeringAttachments.length === files.length
+        && steeringAttachments.every((attachment, index) => attachment?.file === files[index]?.file);
+      if (draftAttachmentsUnchanged) clearSteeringDraftAttachments();
     }
     clearSteeringCompletionOffer();
     steeringAwaitingTurnCompletion = true;
@@ -513,7 +631,8 @@ async function processSteeringQueue(options = {}) {
   if (steeringProcessing) return false;
   const dispatchToken = acquireSteeringQueueDispatchLock(options.source || 'queue');
   if (!dispatchToken) return false;
-  if (!canAutoSendSteeringNow()) {
+  const allowGoogleIdle = options.source === 'resume_button' || options.source === 'manual';
+  if (!canAutoSendSteeringNow({ allowGoogleIdle })) {
     releaseSteeringQueueDispatchLock(dispatchToken);
     return false;
   }

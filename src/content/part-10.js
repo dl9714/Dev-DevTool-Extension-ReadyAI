@@ -228,6 +228,59 @@ function buildSteeringRefs() {
   return steeringRefs;
 }
 function bindSteeringUiEvents() {
+  let steeringComposerSubmitAt = 0;
+  let steeringComposerSubmitTimer = null;
+  let steeringComposerImmediateRequested = false;
+  let steeringComposerAllowLineBreakUntil = 0;
+  const submitSteeringComposerFromKeyboard = (options = {}) => {
+    const run = () => {
+      steeringComposerSubmitTimer = null;
+      const input = steeringRefs?.input;
+      if (!input) return;
+      if (options.removeInsertedLineBreak) {
+        try { input.value = String(input.value || '').replace(/(?:\r?\n)+$/, ''); } catch (_) {}
+      }
+      syncSteeringDraftFromInput();
+      const now = Date.now();
+      if (now - steeringComposerSubmitAt < 160) return;
+      steeringComposerSubmitAt = now;
+      const sendImmediately = options.sendImmediately === true || steeringComposerImmediateRequested;
+      steeringComposerImmediateRequested = false;
+      if (sendImmediately) sendSteeringDraftImmediately();
+      else submitSteeringInput();
+    };
+    try { clearTimeout(steeringComposerSubmitTimer); } catch (_) {}
+    if (options.defer) steeringComposerSubmitTimer = window.setTimeout(run, 0);
+    else run();
+  };
+  const handleSteeringComposerKeydown = (event) => {
+    if (event?.target !== steeringRefs.input) return;
+    try { event.stopPropagation(); } catch (_) {}
+    if (event.repeat) {
+      if (event.key === 'Enter') {
+        try { event.preventDefault(); } catch (_) {}
+      }
+      return;
+    }
+    if (event.key === 'Escape') {
+      try { event.preventDefault(); } catch (_) {}
+      steeringPanelOpen = false;
+      updateSteeringUi();
+      return;
+    }
+    if (event.key !== 'Enter') return;
+    if (event.shiftKey) {
+      steeringComposerAllowLineBreakUntil = Date.now() + 250;
+      return;
+    }
+    steeringComposerImmediateRequested = !!(event.ctrlKey || event.metaKey);
+    if (event.isComposing || event.keyCode === 229) {
+      submitSteeringComposerFromKeyboard({ defer: true });
+      return;
+    }
+    try { event.preventDefault(); } catch (_) {}
+    submitSteeringComposerFromKeyboard();
+  };
   const consume = (handler) => (event) => {
     try { event.preventDefault(); } catch (_) {}
     try { event.stopPropagation(); } catch (_) {}
@@ -339,13 +392,6 @@ function bindSteeringUiEvents() {
     });
     return true;
   };
-  try { clearInterval(window.__readyAiNewChatCountSanitizeTimer); } catch (_) {}
-  try {
-    window.__readyAiNewChatCountSanitizeTimer = setInterval(() => {
-      if (steeringRoot?.activeElement !== steeringRefs.newChatCount) return;
-      syncNewChatCountInput();
-    }, 200);
-  } catch (_) {}
   steeringRefs.newChatCount?.addEventListener('change', consume(() => {
     if (!syncNewChatCountInput({ silentStatus: false })) setSteeringNewChatTabCountValue(steeringRefs.newChatCount.value);
   }));
@@ -490,25 +536,17 @@ function bindSteeringUiEvents() {
     try { event.stopPropagation(); } catch (_) {}
     await addSteeringAttachments(files);
   });
-  steeringRefs.input.addEventListener('input', () => {
+  steeringRefs.input.addEventListener('input', (event) => {
     syncSteeringDraftFromInput();
     updateSteeringUi();
+    const inputType = String(event?.inputType || '');
+    if (!/^(insertLineBreak|insertParagraph)$/.test(inputType)) return;
+    if (Date.now() <= steeringComposerAllowLineBreakUntil) return;
+    submitSteeringComposerFromKeyboard({
+      defer: true,
+      removeInsertedLineBreak: true,
+    });
   });
-  steeringRefs.input.addEventListener('keydown', (event) => {
-    try { event.stopPropagation(); } catch (_) {}
-    if (event.isComposing) return;
-    if (event.key === 'Escape') {
-      try { event.preventDefault(); } catch (_) {}
-      steeringPanelOpen = false;
-      updateSteeringUi();
-      return;
-    }
-    if (event.key !== 'Enter' || event.shiftKey) return;
-    try { event.preventDefault(); } catch (_) {}
-    if (event.ctrlKey || event.metaKey) {
-      sendSteeringDraftImmediately();
-      return;
-    }
-    submitSteeringInput();
-  });
+  steeringRoot.addEventListener('keydown', handleSteeringComposerKeydown, true);
+  steeringRefs.input.addEventListener('keydown', handleSteeringComposerKeydown);
 }

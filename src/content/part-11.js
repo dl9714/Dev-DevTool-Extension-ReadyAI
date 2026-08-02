@@ -103,6 +103,7 @@ function applySteeringUiNow() {
   syncSteeringQueueCount();
   syncTitleBadgeFromUiRender(false);
   setSteeringDisplayIfChanged(steeringHost, (steeringPanelOpen || steeringLauncherVisible) ? 'block' : 'none');
+  fitOpenSteeringUiInsideViewport();
 }
 function updateSteeringUi() {
   if (steeringUiRafId) return;

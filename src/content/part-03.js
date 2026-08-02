@@ -363,12 +363,20 @@ function releaseSteeringQueueDispatchLock(token) {
 function hasActiveSteeringOffer() {
   return !isGenerating && (completionStatus === 'completed' || completionStatus === 'idle');
 }
-function canAutoSendSteeringNow() {
+function isGoogleSteeringQueueWaitingForCompletion() {
+  const siteKey = getSiteKey();
+  return (siteKey === 'gemini' || siteKey === 'aistudio') && completionStatus !== 'completed';
+}
+function canAutoSendSteeringNow(options = {}) {
   if (isChatGptUnobservedSteeringTurnPending()) return false;
+  // Gemini와 AI Studio의 리치 편집기는 유휴 상태에서 확장 프로그램이
+  // 자동으로 내용을 주입하면 편집기 재조정이 겹칠 수 있다. 자동 경로는
+  // 실제 답변 완료 뒤에만 열고, 명시적인 수동 전송만 예외로 허용한다.
+  if (!options.allowGoogleIdle && isGoogleSteeringQueueWaitingForCompletion()) return false;
   return hasActiveSteeringOffer() && !steeringSendLock && !steeringProcessing && !steeringAwaitingResponseStart && !steeringAwaitingTurnCompletion;
 }
 function canUserRunSteeringQueueNow() {
-  return !!(monitoring && steeringEnabled && steeringQueue.length && canAutoSendSteeringNow());
+  return !!(monitoring && steeringEnabled && steeringQueue.length && canAutoSendSteeringNow({ allowGoogleIdle: true }));
 }
 function getSteeringQueueWaitMessage() {
   if (!steeringQueue.length) return '전송할 대기가 없습니다.';
@@ -604,8 +612,21 @@ function positionSteeringUi(force = false) {
   steeringHost.style.bottom = '140px';
   applySteeringViewportSizeVars(140);
 }
+function fitOpenSteeringUiInsideViewport() {
+  if (!steeringHost || !steeringPanelOpen) return;
+  try {
+    const safeTop = 12;
+    const rect = steeringHost.getBoundingClientRect();
+    if (!Number.isFinite(rect.top) || rect.top >= safeTop) return;
+    const currentBottom = Math.max(12, Number.parseFloat(steeringHost.style.bottom || '12') || 12);
+    const nextBottom = Math.max(12, Math.floor(currentBottom - (safeTop - rect.top)));
+    if (Math.abs(nextBottom - currentBottom) < 1) return;
+    steeringHost.style.bottom = `${nextBottom}px`;
+  } catch (_) {}
+}
 window.addEventListener('resize', () => {
   positionSteeringUi();
+  fitOpenSteeringUiInsideViewport();
 });
 function isSteeringTarget(target) {
   if (!target) return false;

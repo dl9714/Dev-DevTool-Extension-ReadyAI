@@ -67,8 +67,8 @@ const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
 const READY_AI_CONTENT_VERSION = '2026-06-12.21-single-queue-dispatch';
-const READY_AI_CONTENT_BUILD_VERSION = '2026-08-02.25-dnd-favorite-toggle';
-const READY_AI_CANONICAL_EXTENSION_ID = 'deojggohikpfbhgdjbdogmkdgpkcighm';
+const READY_AI_CONTENT_BUILD_VERSION = '2026-08-02.69-bottom-composer-safe';
+const READY_AI_CANONICAL_EXTENSION_ID = 'jmgnmeaiahlpbbgnocmognokfecofkma';
 const READY_AI_LEGACY_MIRROR_EXTENSION_ID = 'ajnolilmicdilijebljgchoodgajnfeg';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
 const TITLE_GUARD_MAIN_FILE = 'src/content/title-guard-main.js';
@@ -87,6 +87,22 @@ const CONTENT_SCRIPT_FILES = Object.freeze([
   'src/content/part-11.js',
   'src/content/part-12.js',
 ]);
+const MANIFEST_CONTENT_HOSTS = new Set([
+  'gemini.google.com',
+  'aistudio.google.com',
+  'makersuite.google.com',
+  'claude.ai',
+  'www.perplexity.ai',
+  'perplexity.ai',
+  'copilot.microsoft.com',
+]);
+function isManifestManagedContentUrl(url) {
+  try {
+    return MANIFEST_CONTENT_HOSTS.has(new URL(String(url || '')).hostname.toLowerCase());
+  } catch (_) {
+    return false;
+  }
+}
 function getReadyAiRuntimeId() {
   try {
     return String(chrome?.runtime?.id || '');
@@ -149,6 +165,7 @@ let chatGptNewChatRateLimitUntil = 0;
 let tabMetaCache = {}; // { [tabId]: { id, title, url, active, discarded, windowId } }
 let tabCacheInitialized = false;
 let actionStateCache = {}; // { [tabId]: signature }
+let titleRecoveryAttemptAt = {}; // { [tabId]: timestamp }
 let dashboardVersion = 1;
 let customTabTitles = {};
 let customTabTitlesFlushTimer = null;
@@ -568,7 +585,7 @@ function getDashboardItemsFromCache() {
   dashboardItemsCacheVersion = dashboardVersion;
   return dashboardItemsCache.slice();
 }
-function pScriptingExec(tabId, files, allFrames = false) {
+function pScriptingExecOnce(tabId, files, allFrames = false) {
   return new Promise((resolve) => {
     try {
       if (!chrome.scripting?.executeScript) return resolve(false);
@@ -586,6 +603,19 @@ function pScriptingExec(tabId, files, allFrames = false) {
       resolve(false);
     }
   });
+}
+async function pScriptingExec(tabId, files, allFrames = false) {
+  const fileList = (Array.isArray(files) ? files : [files]).filter(Boolean);
+  if (!fileList.length) return false;
+  if (await pScriptingExecOnce(tabId, fileList, allFrames)) return true;
+  if (fileList.length === 1) return false;
+  // 일부 Chrome 환경에서 여러 확장 파일을 한 번에 가져올 때
+  // "An unknown error occurred when fetching the script"가 발생한다.
+  // 실행 순서를 유지한 채 파일별 주입으로 복구한다.
+  for (const file of fileList) {
+    if (!(await pScriptingExecOnce(tabId, [file], allFrames))) return false;
+  }
+  return true;
 }
 function pScriptingExecMainFiles(tabId, files, allFrames = false) {
   return new Promise((resolve) => {
@@ -632,6 +662,25 @@ function pScriptingExecMainFunction(tabId, func, args = []) {
       }
     };
     run(true);
+  });
+}
+function pScriptingExecMainFunctionStrict(tabId, func, args = []) {
+  return new Promise((resolve) => {
+    try {
+      if (!chrome.scripting?.executeScript) return resolve(null);
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: false },
+        func,
+        args: Array.isArray(args) ? args : [],
+        world: 'MAIN',
+      }, (results) => {
+        if (chrome.runtime.lastError) return resolve(null);
+        const first = Array.isArray(results) ? results[0] : null;
+        resolve(first?.result ?? null);
+      });
+    } catch (_) {
+      resolve(null);
+    }
   });
 }
 async function triggerChatGptNativeImmediateSteer(tabId, expectedText) {
@@ -931,6 +980,135 @@ async function triggerChatGptNativeImmediateSteer(tabId, expectedText) {
     };
   }, [expectedText]);
 }
+async function triggerGoogleDebuggerNativeSteer(tabId, expectedText, siteKey = '') {
+  if (typeof tabId !== 'number') return { ok: false, sent: false, message: 'Google AI 탭을 찾지 못했습니다.' };
+  const text = String(expectedText || '').trim();
+  if (!text) return { ok: false, sent: false, message: '보낼 내용이 없습니다.' };
+  return await pScriptingExecMainFunctionStrict(tabId, async (rawText, rawSiteKey) => {
+    const normalize = (value) => String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+    const expected = normalize(rawText);
+    const site = String(rawSiteKey || '').toLowerCase();
+    const sleepInPage = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const visible = (el) => {
+      if (!el || !el.isConnected) return false;
+      try {
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      } catch (_) {
+        return false;
+      }
+    };
+    const selectors = site === 'aistudio'
+      ? ['textarea', 'div[contenteditable="true"][role="textbox"]', 'div[contenteditable="true"]']
+      : ['rich-textarea .ql-editor[contenteditable="true"]', '[contenteditable="true"][aria-label*="Gemini"]', '.ql-editor[contenteditable="true"]', 'textarea'];
+    const getComposer = () => {
+      const candidates = [];
+      const seen = new Set();
+      for (const selector of selectors) {
+        for (const composer of Array.from(document.querySelectorAll(selector))) {
+          if (seen.has(composer) || !visible(composer)) continue;
+          seen.add(composer);
+          candidates.push(composer);
+        }
+      }
+      // Previous turns can retain visible Quill editors. The live chat
+      // composer is the lowest eligible editor in both Gemini and AI Studio.
+      candidates.sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom);
+      return candidates[0] || null;
+    };
+    const read = (el) => normalize(el?.tagName === 'TEXTAREA' || el?.tagName === 'INPUT' ? el.value : (el?.innerText || el?.textContent || ''));
+    if (site === 'gemini') {
+      const hydrationDeadline = Date.now() + 6000;
+      while (Date.now() <= hydrationDeadline) {
+        const modeReady = !!document.querySelector('button[aria-label*="모드 선택"], button[aria-label*="mode" i]');
+        const loading = Array.from(document.querySelectorAll('[role="progressbar"], mat-progress-bar')).some(visible);
+        if (modeReady || !loading) break;
+        await sleepInPage(120);
+      }
+    }
+    const composer = getComposer();
+    if (!composer) return { ok: false, sent: false, retryable: true, stage: 'focus', message: 'Google AI 입력창을 찾지 못했습니다.' };
+    try { composer.focus({ preventScroll: false }); } catch (_) { try { composer.focus(); } catch (_) {} }
+    try {
+      if (composer.tagName === 'TEXTAREA' || composer.tagName === 'INPUT') {
+        const proto = composer.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (setter) setter.call(composer, String(rawText || ''));
+        else composer.value = String(rawText || '');
+        composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(rawText || '') }));
+      } else {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(composer);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        const inserted = document.execCommand('insertText', false, String(rawText || ''));
+        if (!inserted || read(composer) !== expected) {
+          composer.textContent = String(rawText || '');
+          composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(rawText || '') }));
+        }
+      }
+    } catch (_) {
+      return { ok: false, sent: false, retryable: true, stage: 'insert', message: 'Google AI 입력창에 지시를 반영하지 못했습니다.' };
+    }
+    await sleepInPage(180);
+    if (read(composer) !== expected) {
+      return { ok: false, sent: false, retryable: true, stage: 'verify', after: read(composer), message: 'Google AI 편집기 반영을 확인하지 못했습니다.' };
+    }
+    const label = (el) => [el?.getAttribute?.('aria-label'), el?.getAttribute?.('title'), el?.getAttribute?.('data-testid'), el?.getAttribute?.('mattooltip'), el?.innerText, el?.textContent].filter(Boolean).join(' ');
+    const composerRect = composer.getBoundingClientRect();
+    const sendPattern = site === 'aistudio' ? /send|보내기|전송|run|실행/i : /send|보내기|전송/i;
+    const blockedPattern = /다시\s*(?:실행|시도|생성)|재생성|retry|rerun|regenerate|stop|중지|cancel|abort|mic|voice|upload|첨부|menu|도구|tool/i;
+    const findSendButton = () => {
+      const buttons = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"]')).filter((el) => {
+        if (!visible(el) || el.disabled || el.getAttribute?.('aria-disabled') === 'true') return false;
+        const value = label(el);
+        return !blockedPattern.test(value) && sendPattern.test(value);
+      });
+      buttons.sort((a, b) => {
+        const score = (el) => {
+          const rect = el.getBoundingClientRect();
+          return Math.abs((rect.left + (rect.width / 2)) - (composerRect.left + (composerRect.width / 2)))
+            + Math.abs((rect.top + (rect.height / 2)) - (composerRect.top + (composerRect.height / 2)));
+        };
+        return score(a) - score(b);
+      });
+      return buttons[0] || null;
+    };
+    let button = findSendButton();
+    const buttonDeadline = Date.now() + 2600;
+    while (!button && Date.now() <= buttonDeadline) {
+      await sleepInPage(120);
+      button = findSendButton();
+    }
+    if (!button) return { ok: false, sent: false, retryable: true, stage: 'button', after: read(composer), message: 'Google AI 보내기 버튼이 활성화되지 않았습니다.' };
+    try { button.click(); } catch (_) {}
+    await sleepInPage(320);
+    if (read(composer) === expected) {
+      try {
+        const form = button.form || composer.closest?.('form');
+        if (form?.requestSubmit) form.requestSubmit(button);
+      } catch (_) {}
+      await sleepInPage(220);
+    }
+    if (read(composer) === expected) {
+      try {
+        composer.focus();
+        const ctrlKey = site === 'aistudio';
+        composer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ctrlKey, bubbles: true, cancelable: true }));
+        composer.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ctrlKey, bubbles: true, cancelable: true }));
+      } catch (_) {}
+    }
+    const deadline = Date.now() + 5200;
+    while (Date.now() <= deadline) {
+      const current = getComposer();
+      if (!current || read(current) !== expected) return { ok: true, sent: true, immediate: true, route: 'google_main_world_submit', message: '현재 작업에 즉시 반영했습니다.' };
+      await sleepInPage(120);
+    }
+    return { ok: false, sent: false, retryable: true, stage: 'confirm', after: read(getComposer()), message: 'Google AI 전송 시작을 확인하지 못했습니다.' };
+  }, [text, String(siteKey || '')]) || { ok: false, sent: false, retryable: true, stage: 'main', message: 'Google AI 보내기 경로를 실행하지 못했습니다.' };
+}
 async function ensureMainWorldTitleGuard(tabId) {
   if (typeof tabId !== 'number') return false;
   try {
@@ -1042,18 +1220,42 @@ async function ensureContentScripts(tab, options = {}) {
   const chatGptTopFrameOnly = site?.key === 'chatgpt' || isChatGptUrl(url);
   const messageOptions = (options.frameId === 0 || chatGptTopFrameOnly) ? { frameId: 0 } : null;
   const topFrameOnly = !!options.topFrameOnly || chatGptTopFrameOnly;
-  const injectAllFrames = chatGptTopFrameOnly ? false : options.allFrames !== false;
+  // Gemini/AI Studio도 작성기와 상태 UI가 최상위 문서에 있다.
+  // 기본 allFrames 주입은 접근 불가한 내부 iframe에서 일부 파일만 실행된 뒤
+  // 최상위 문서 재주입까지 막을 수 있으므로 명시적으로 요청한 경우에만 사용한다.
+  const injectAllFrames = !chatGptTopFrameOnly && options.allFrames === true;
   // 1) ping으로 content 존재 확인. 구버전 content script는 버전이 없으므로 재주입한다.
-  const alive = await pTabsSendMessageResult(tabId, { action: 'ping', topFrameOnly }, 1500, messageOptions);
-  if (alive?.ok && alive.readyAiContentVersion === READY_AI_CONTENT_VERSION && !options.forceInject) {
-    if (site?.key !== 'chatgpt') await ensureMainWorldTitleGuard(tabId);
+  let alive = await pTabsSendMessageResult(tabId, { action: 'ping', topFrameOnly }, 1500, messageOptions);
+  const isCurrentBuild = (response) => !!(
+    response?.ok
+    && response.readyAiContentVersion === READY_AI_CONTENT_VERSION
+    && response.readyAiContentBuildVersion === READY_AI_CONTENT_BUILD_VERSION
+  );
+  if (isCurrentBuild(alive) && !options.forceInject) {
+    if (site?.key !== 'chatgpt' && site?.key !== 'gemini' && site?.key !== 'aistudio') await ensureMainWorldTitleGuard(tabId);
     return true;
+  }
+  // 매니페스트에 등록된 기본 사이트는 document_idle에서 Chrome이 직접 주입한다.
+  // 탭 이벤트와 document_idle의 짧은 경합 때문에 여기서 같은 파일을 다시 실행하면
+  // 기존 MutationObserver/타이머의 참조가 유실되어 중복 감시와 CPU 폭증이 발생한다.
+  // 따라서 기본 사이트는 잠시 기다려 ping만 재확인하고, 수동 재주입하지 않는다.
+  if (isManifestManagedContentUrl(url)) {
+    for (const waitMs of [120, 320, 700]) {
+      await sleep(waitMs);
+      alive = await pTabsSendMessageResult(tabId, { action: 'ping', topFrameOnly }, 1500, messageOptions);
+      if (isCurrentBuild(alive)) {
+        if (site?.key !== 'chatgpt' && site?.key !== 'gemini' && site?.key !== 'aistudio') await ensureMainWorldTitleGuard(tabId);
+        await pTabsSendMessage(tabId, { action: 'force_check', reason: 'manifest_ready', topFrameOnly }, messageOptions);
+        return true;
+      }
+    }
+    return false;
   }
   // 2) 없으면 강제 주입(필요 권한: "scripting")
   let injected = await pScriptingExec(tabId, CONTENT_SCRIPT_FILES, injectAllFrames);
   if (!injected && injectAllFrames) injected = await pScriptingExec(tabId, CONTENT_SCRIPT_FILES, false);
   if (!injected) return false;
-  if (site?.key !== 'chatgpt') await ensureMainWorldTitleGuard(tabId);
+  if (site?.key !== 'chatgpt' && site?.key !== 'gemini' && site?.key !== 'aistudio') await ensureMainWorldTitleGuard(tabId);
   // 3) 주입 직후 즉시 체크 요청
   const reinjected = await pTabsSendMessageResult(tabId, { action: 'ping', topFrameOnly }, 1500, messageOptions);
   await pTabsSendMessage(tabId, { action: 'force_check', reason: 'inject', topFrameOnly }, messageOptions);
@@ -1087,6 +1289,14 @@ function isChatGptUrl(url) {
   try {
     const host = new URL(String(url || '')).hostname.toLowerCase();
     return host === 'chatgpt.com' || host.endsWith('.chatgpt.com') || host === 'chat.openai.com';
+  } catch (_) {
+    return false;
+  }
+}
+function isGoogleAiUrl(url) {
+  try {
+    const host = new URL(String(url || '')).hostname.toLowerCase();
+    return host === 'gemini.google.com' || host === 'aistudio.google.com';
   } catch (_) {
     return false;
   }
@@ -2533,6 +2743,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, message: err?.message || '즉시 반영 중 오류가 발생했습니다.' }));
     return true;
   }
+  if (message.action === 'google_native_steer') {
+    const tabUrl = sender.tab?.url || sender.url || '';
+    const host = (() => { try { return new URL(tabUrl).hostname.toLowerCase(); } catch (_) { return ''; } })();
+    const siteKey = host === 'aistudio.google.com' || host === 'makersuite.google.com'
+      ? 'aistudio'
+      : (host === 'gemini.google.com' ? 'gemini' : '');
+    if (frameId !== 0 || !siteKey) {
+      sendResponse({ ok: false, sent: false, message: 'Google AI 최상위 탭이 아닙니다.' });
+      return;
+    }
+    triggerGoogleDebuggerNativeSteer(tabId, message.text || '', siteKey)
+      .then((result) => sendResponse({
+        ...(result || { ok: false, sent: false, message: 'Google AI 전송 결과를 확인하지 못했습니다.' }),
+        readyAiBackgroundBuildVersion: READY_AI_CONTENT_BUILD_VERSION,
+      }))
+      .catch((err) => sendResponse({ ok: false, sent: false, retryable: true, message: err?.message || 'Google AI 전송 중 오류가 발생했습니다.' }));
+    return true;
+  }
   if (isReadyAiPassiveDuplicateBackground()) return;
   if (message.action === 'open_chatgpt_new_chat_tabs') {
     openChatGptNewChatTabsForPrompt(message, sender)
@@ -2542,10 +2770,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   // content script(iframe)에서 top tab URL이 필요할 때 사용
   if (message.action === 'get_tab_url') {
-    sendResponse({ url: sender.tab?.url || '' });
+    sendResponse({ url: sender.tab?.url || '', readyAiBackgroundBuildVersion: READY_AI_CONTENT_BUILD_VERSION });
     return;
   }
   if (message.action === 'ensure_title_guard') {
+    if (isGoogleAiUrl(sender.tab?.url || '')) {
+      sendResponse({ ok: false, skipped: true, reason: 'google_ai_title_safe_mode' });
+      return;
+    }
     ensureMainWorldTitleGuard(tabId)
       .then((ok) => sendResponse({ ok: !!ok }))
       .catch(() => sendResponse({ ok: false }));
@@ -2817,16 +3049,21 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const nextUrl = tab?.url || changeInfo.url || prevMeta.url || '';
   const titleChangedWithoutBadge = Object.prototype.hasOwnProperty.call(changeInfo, 'title')
     && isMonitoredUrl(nextUrl)
+    && !isGoogleAiUrl(nextUrl)
     && !titleHasReadyAiPrefix(changeInfo.title || tab?.title || '');
-  if (changeInfo.status === 'complete' || changeInfo.url || titleChangedWithoutBadge) {
+  const now = Date.now();
+  const titleRecoveryAllowed = titleChangedWithoutBadge
+    && now - Math.max(0, Number(titleRecoveryAttemptAt[tabId]) || 0) >= 10000;
+  if (changeInfo.status === 'complete' || changeInfo.url || titleRecoveryAllowed) {
     safeActionCall((async () => {
       const latest = await pTabsGet(tabId);
       const candidate = { ...prevMeta, ...(tab || {}), ...(latest || {}), id: tabId, url: latest?.url || nextUrl };
       if (!shouldEnsureContentForTabEvent(candidate)) return;
       const ready = await ensureContentScripts(candidate);
       if (!ready) return;
-      if (titleChangedWithoutBadge) {
-        if (!isChatGptUrl(candidate.url || '')) await ensureMainWorldTitleGuard(tabId);
+      if (titleRecoveryAllowed) {
+        titleRecoveryAttemptAt[tabId] = Date.now();
+        if (!isChatGptUrl(candidate.url || '') && !isGoogleAiUrl(candidate.url || '')) await ensureMainWorldTitleGuard(tabId);
         await pTabsSendMessage(tabId, { action: 'force_title_sync', reason: 'tab_title' }, { frameId: 0 });
         return;
       }
@@ -2913,6 +3150,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   clearCustomTabTitleForTab(tabId);
   delete tabMetaCache[tabId];
   delete actionStateCache[tabId];
+  delete titleRecoveryAttemptAt[tabId];
   const hadTrackedState = !!tabStates[tabId];
   const wasOrange = tabStates[tabId]?.status === 'ORANGE';
   const prevOrangeCount = wasOrange ? getOrangeTabCount() : 0;

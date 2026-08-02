@@ -82,7 +82,7 @@ function startMonitoring(site) {
   hasSentInitialState = false;
   const chatGptSafeMode = chatGptSafeModeCandidate;
   if (!hasCustomTabTitle()) nativePageTitle = getCleanDocumentTitleText() || activeSite?.name || 'AI';
-  if (!chatGptSafeMode) ensureTitleSyncObserver();
+  if (!chatGptSafeMode && !isGoogleAiTitleSafeMode()) ensureTitleSyncObserver();
   clearSteeringAutoSendTimer();
   clearSteeringSendLock();
   steeringProcessing = false;
@@ -92,27 +92,22 @@ function startMonitoring(site) {
     bootstrapChatGptSafeModeTitleBadge();
     return;
   }
-  // 오픈 shadowRoot deep query/observe 활성화
-  try { setDeepEnabled(shouldEnableDeepForSite(site)); } catch (_) {}
-  // DOM 변화를 감지하여 체크 실행
-  _observer = new MutationObserver(() => {
-    if (getSiteKey() === 'chatgpt' && isGenerating) return;
-    scheduleCheck();
-  });
-  try {
-    const observeOptions = {
-      childList: true,
-      subtree: true,
-    };
-    if (shouldObserveStatusAttributes(site)) {
-      // Gemini는 childList 변화 없이 style/class/aria-label만 바뀌는 경우가 있어
-      // attributes 감시를 켜야 🟠 -> ⚪ 전환을 놓치지 않는다.
-      observeOptions.attributes = true;
-      observeOptions.attributeFilter = ['aria-label', 'style', 'class', 'hidden', 'disabled'];
+  if (isGoogleAiTitleSafeMode()) publishTitleGuardState({ enabled: false, force: true });
+  // Gemini deep observer는 document도 포함하므로 같은 전체 DOM을 두 번 감시하지 않는다.
+  const deepEnabled = shouldEnableDeepForSite(site);
+  try { setDeepEnabled(deepEnabled); } catch (_) {}
+  if (!deepEnabled) {
+    _observer = new MutationObserver(() => scheduleCheck());
+    try {
+      const observeOptions = { childList: true, subtree: true };
+      if (shouldObserveStatusAttributes(site)) {
+        observeOptions.attributes = true;
+        observeOptions.attributeFilter = ['aria-label', 'hidden', 'disabled', 'aria-disabled'];
+      }
+      _observer.observe(document.body, observeOptions);
+    } catch (_) {
+      // 일부 문서(특수 프레임)에서는 observe 실패할 수 있음
     }
-    _observer.observe(document.body, observeOptions);
-  } catch (_) {
-    // 일부 문서(특수 프레임)에서는 observe 실패할 수 있음
   }
   ensurePolling();
   loadSteeringPrefs(() => {
