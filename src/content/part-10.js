@@ -227,11 +227,17 @@ function buildSteeringRefs() {
   };
   return steeringRefs;
 }
+function getSteeringComposerEnterMode(event) {
+  if (!event || event.key !== 'Enter') return '';
+  if (event.repeat) return 'repeat';
+  if (event.shiftKey) return 'linebreak';
+  return event.ctrlKey || event.metaKey ? 'immediate' : 'queue';
+}
 function bindSteeringUiEvents() {
-  let steeringComposerSubmitAt = 0;
   let steeringComposerSubmitTimer = null;
   let steeringComposerImmediateRequested = false;
   let steeringComposerAllowLineBreakUntil = 0;
+  const handledSteeringComposerKeydowns = new WeakSet();
   const submitSteeringComposerFromKeyboard = (options = {}) => {
     const run = () => {
       steeringComposerSubmitTimer = null;
@@ -241,9 +247,6 @@ function bindSteeringUiEvents() {
         try { input.value = String(input.value || '').replace(/(?:\r?\n)+$/, ''); } catch (_) {}
       }
       syncSteeringDraftFromInput();
-      const now = Date.now();
-      if (now - steeringComposerSubmitAt < 160) return;
-      steeringComposerSubmitAt = now;
       const sendImmediately = options.sendImmediately === true || steeringComposerImmediateRequested;
       steeringComposerImmediateRequested = false;
       if (sendImmediately) sendSteeringDraftImmediately();
@@ -255,11 +258,12 @@ function bindSteeringUiEvents() {
   };
   const handleSteeringComposerKeydown = (event) => {
     if (event?.target !== steeringRefs.input) return;
+    if (handledSteeringComposerKeydowns.has(event)) return;
+    handledSteeringComposerKeydowns.add(event);
     try { event.stopPropagation(); } catch (_) {}
-    if (event.repeat) {
-      if (event.key === 'Enter') {
-        try { event.preventDefault(); } catch (_) {}
-      }
+    const enterMode = getSteeringComposerEnterMode(event);
+    if (enterMode === 'repeat') {
+      try { event.preventDefault(); } catch (_) {}
       return;
     }
     if (event.key === 'Escape') {
@@ -268,12 +272,12 @@ function bindSteeringUiEvents() {
       updateSteeringUi();
       return;
     }
-    if (event.key !== 'Enter') return;
-    if (event.shiftKey) {
+    if (!enterMode) return;
+    if (enterMode === 'linebreak') {
       steeringComposerAllowLineBreakUntil = Date.now() + 250;
       return;
     }
-    steeringComposerImmediateRequested = !!(event.ctrlKey || event.metaKey);
+    steeringComposerImmediateRequested = enterMode === 'immediate';
     if (event.isComposing || event.keyCode === 229) {
       submitSteeringComposerFromKeyboard({ defer: true });
       return;

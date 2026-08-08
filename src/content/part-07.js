@@ -239,6 +239,91 @@ function requestGoogleNativeSteer(text, timeoutMs = 9000) {
     }
   });
 }
+function getVisibleChatGptStopButton() {
+  const selector = typeof CHATGPT_STOP_SELECTOR === 'string'
+    ? CHATGPT_STOP_SELECTOR
+    : '[data-testid="stop-button"],button[aria-label*="Stop"],button[aria-label*="stop"],button[aria-label*="중지"],button[data-testid*="stop"]';
+  let candidates = [];
+  try { candidates = Array.from(document.querySelectorAll(selector)).slice(-8); } catch (_) { candidates = []; }
+  return candidates.find((candidate) => isVisible(candidate)) || null;
+}
+async function waitForChatGptUserTurnText(text, beforeCount, timeoutMs = 2200) {
+  const expected = String(text || '').trim();
+  if (!expected || typeof countRecentChatGptUserTurnText !== 'function') return false;
+  const deadline = Date.now() + Math.max(400, Number(timeoutMs) || 2200);
+  while (Date.now() <= deadline) {
+    if (countRecentChatGptUserTurnText(expected) > beforeCount) return true;
+    await waitForSteeringTick(70);
+  }
+  return countRecentChatGptUserTurnText(expected) > beforeCount;
+}
+async function sendChatGptImmediateViaStableControls(composer, text, timeoutMs = 6200) {
+  const expected = String(text || '').trim();
+  if (!composer || !expected) return { ok: false, sent: false, retryable: false };
+  const deadline = Date.now() + Math.max(2600, Number(timeoutMs) || 6200);
+  let interrupted = false;
+  let submitAttempts = 0;
+  while (Date.now() <= deadline) {
+    const stopButton = getVisibleChatGptStopButton();
+    if (stopButton) {
+      if (!interrupted && isEnabledButtonLike(stopButton)) {
+        try { stopButton.click(); interrupted = true; } catch (_) {}
+      }
+      await waitForSteeringTick(80);
+      continue;
+    }
+    const liveComposer = getActiveComposer() || composer;
+    const currentText = String(getCurrentComposerText(liveComposer) || '').trim();
+    if (currentText !== expected) {
+      setControlValue(liveComposer, expected);
+      const ready = await waitForSteeringComposerText(liveComposer, expected, 700);
+      if (!ready.ok) {
+        await waitForSteeringTick(100);
+        continue;
+      }
+    }
+    const beforeCount = typeof countRecentChatGptUserTurnText === 'function'
+      ? countRecentChatGptUserTurnText(expected)
+      : 0;
+    const sendButton = getActiveSendButton() || findNearbySendButton(liveComposer);
+    let triggered = false;
+    if (sendButton) {
+      if (!isEnabledButtonLike(sendButton)) {
+        await waitForSteeringTick(100);
+        continue;
+      }
+      try { sendButton.click(); triggered = true; } catch (_) { triggered = false; }
+    } else {
+      triggered = requestSubmitComposer(liveComposer);
+      if (!triggered) triggered = dispatchSubmitKey(liveComposer);
+    }
+    if (triggered) {
+      submitAttempts += 1;
+      if (await waitForChatGptUserTurnText(expected, beforeCount, 1900)) {
+        return {
+          ok: true,
+          sent: true,
+          immediate: true,
+          route: interrupted ? 'chatgpt_interrupt_then_send' : 'chatgpt_generation_finished_then_send',
+          message: interrupted ? '현재 작업을 조정해 즉시 반영했습니다.' : '바로 전송했습니다.',
+        };
+      }
+      if (submitAttempts >= 2) break;
+    }
+    await waitForSteeringTick(120);
+  }
+  const liveComposer = getActiveComposer() || composer;
+  if (String(getCurrentComposerText(liveComposer) || '').trim() !== expected) {
+    setControlValue(liveComposer, expected);
+    await waitForSteeringComposerText(liveComposer, expected, 700);
+  }
+  return {
+    ok: false,
+    sent: false,
+    retryable: true,
+    message: 'ChatGPT 전송 버튼이 안정화되지 않아 Ctrl+Enter 지시를 입력창에 보존했습니다.',
+  };
+}
 async function sendSteeringPromptText(text, options = {}) {
   const composer = getActiveComposer();
   if (!composer) {
@@ -271,6 +356,7 @@ async function sendSteeringPromptText(text, options = {}) {
     if (!mergedText && !files.length) {
       return { ok: false, sent: false, message: '보낼 내용이 없습니다.' };
     }
+    if (siteKey === 'aistudio') armAiStudioGenerationProbeBurst();
     const googleResult = await requestGoogleNativeSteer(mergedText, Math.max(16000, Number(options.submitStartTimeoutMs) || 0));
     if (googleResult?.ok && googleResult?.sent) return googleResult;
     // Gemini sometimes paints/enables its send button a moment after an image
@@ -313,61 +399,11 @@ async function sendSteeringPromptText(text, options = {}) {
     await waitForSteeringTick(180);
   }
   if (options.requireNativeImmediateSteer && getSiteKey() === 'chatgpt') {
-    const stopSelector = '[data-testid="stop-button"],button[aria-label*="Stop"],button[aria-label*="stop"],button[aria-label*="중지"],button[data-testid*="stop"]';
-    const stopButton = Array.from(document.querySelectorAll(stopSelector)).find((candidate) => {
-      try {
-        const rect = candidate.getBoundingClientRect();
-        const style = getComputedStyle(candidate);
-        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-      } catch (_) {
-        return false;
-      }
-    }) || null;
-    if (stopButton) {
-      try { stopButton.click(); } catch (_) {}
-      const stopDeadline = Date.now() + 2600;
-      while (Date.now() <= stopDeadline) {
-        const stillStopping = Array.from(document.querySelectorAll(stopSelector)).some((candidate) => {
-          try {
-            const rect = candidate.getBoundingClientRect();
-            const style = getComputedStyle(candidate);
-            return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-          } catch (_) {
-            return false;
-          }
-        });
-        if (!stillStopping) break;
-        await waitForSteeringTick(80);
-      }
-      if (String(getCurrentComposerText(composer) || '').trim() !== String(mergedText || '').trim()) {
-        setControlValue(composer, mergedText);
-        await waitForSteeringComposerText(composer, mergedText, 1200);
-      }
-      const submittedAfterInterrupt = await tryTriggerComposerSend(
-        composer,
-        () => {
-          const sendButton = getActiveSendButton() || findNearbySendButton(composer);
-          if (sendButton) {
-            try { sendButton.click(); return true; } catch (_) {}
-          }
-          return requestSubmitComposer(composer);
-        },
-        { submitStartTimeoutMs: Math.min(2600, Math.max(1200, Number(options.nativeImmediateTimeoutMs) || 2200)) }
-      );
-      if (submittedAfterInterrupt) {
-        return { ok: true, sent: true, immediate: true, route: 'chatgpt_interrupt_then_send', message: '현재 작업을 조정해 즉시 반영했습니다.' };
-      }
-    }
-    const immediateResult = await requestChatGptNativeImmediateSteer(mergedText, options.nativeImmediateTimeoutMs);
-    if (immediateResult?.ok && immediateResult?.immediate) {
-      return { ok: true, sent: true, immediate: true, route: immediateResult.route, message: '현재 작업에 즉시 반영했습니다.' };
-    }
-    return {
-      ok: false,
-      sent: false,
-      retryable: true,
-      message: immediateResult?.message || 'ChatGPT의 Ctrl+Enter 즉시 반영 경로를 실행하지 못했습니다.',
-    };
+    return await sendChatGptImmediateViaStableControls(
+      composer,
+      mergedText,
+      Math.max(4200, Number(options.nativeImmediateTimeoutMs) || 6200)
+    );
   }
   const buttonFirstAttempts = [
     () => {
@@ -417,9 +453,17 @@ async function sendSteeringItemImmediately(item, options = {}) {
     setSteeringStatus('후속 지시 기능이 꺼져 있습니다.', true);
     return false;
   }
+  clearSteeringAutoSendTimer();
   if (steeringProcessing) {
-    setSteeringStatus('다른 후속 지시를 전송 중입니다. 잠시만 기다려 주세요.');
-    return false;
+    setSteeringStatus('앞선 전송을 마무리한 뒤 Ctrl+Enter를 바로 실행합니다.');
+    const processingDeadline = Date.now() + 6200;
+    while (steeringProcessing && Date.now() <= processingDeadline) {
+      await waitForSteeringTick(70);
+    }
+    if (steeringProcessing) {
+      setSteeringStatus('앞선 전송이 아직 끝나지 않아 Ctrl+Enter 지시를 입력창에 보존했습니다.', true);
+      return false;
+    }
   }
   const text = String(item?.text || '').trim();
   const files = getSteeringQueueAttachments(item);
@@ -434,12 +478,16 @@ async function sendSteeringItemImmediately(item, options = {}) {
   } catch (_) {
     generatingNow = !!isGenerating;
   }
-  const dispatchToken = acquireSteeringQueueDispatchLock(options.source || 'steer_now');
+  let dispatchToken = acquireSteeringQueueDispatchLock(options.source || 'steer_now');
+  const dispatchDeadline = Date.now() + 1400;
+  while (!dispatchToken && Date.now() <= dispatchDeadline) {
+    await waitForSteeringTick(70);
+    dispatchToken = acquireSteeringQueueDispatchLock(options.source || 'steer_now');
+  }
   if (!dispatchToken) {
-    setSteeringStatus('후속 지시 전송 준비 중입니다. 잠시만 기다려 주세요.');
+    setSteeringStatus('전송 잠금이 풀리지 않아 Ctrl+Enter 지시를 입력창에 보존했습니다.', true);
     return false;
   }
-  clearSteeringAutoSendTimer();
   steeringProcessing = true;
   setSteeringStatus(generatingNow ? '현재 작업에 바로 반영 중...' : '바로 전송 중...');
   updateSteeringUi();
@@ -629,6 +677,8 @@ async function processSteeringQueue(options = {}) {
   if (!monitoring || !steeringEnabled) return false;
   if (!steeringQueue.length) return false;
   if (steeringProcessing) return false;
+  const allowHeldFirstTurn = options.source === 'resume_button';
+  if (shouldHoldSteeringQueueHeadForFirstChatGptTurn({ allowHeldFirstTurn })) return false;
   const dispatchToken = acquireSteeringQueueDispatchLock(options.source || 'queue');
   if (!dispatchToken) return false;
   const allowGoogleIdle = options.source === 'resume_button' || options.source === 'manual';
@@ -826,12 +876,20 @@ function submitSteeringInput() {
     try { refs?.input?.focus(); } catch (_) {}
     return;
   }
-  enqueueSteeringPrompt(text, { files });
+  const holdForFirstChatGptTurn = !!(
+    getSiteKey() === 'chatgpt'
+    && !hasChatGptConversationTurns()
+  );
+  enqueueSteeringPrompt(text, { files, holdForFirstChatGptTurn });
   setSteeringDraftText('');
   try { refs.input.value = ''; } catch (_) {}
   clearSteeringDraftAttachments();
-  const canSendNow = canAutoSendSteeringNow();
-  setSteeringStatus(canSendNow ? '전송 준비 중' : `${getSteeringQueueCountLabel()}`);
+  const canSendNow = !holdForFirstChatGptTurn && canAutoSendSteeringNow();
+  setSteeringStatus(
+    holdForFirstChatGptTurn
+      ? `${getSteeringQueueCountLabel()} · 첫 질문 전에는 Enter 입력을 전송하지 않습니다.`
+      : (canSendNow ? '전송 준비 중' : `${getSteeringQueueCountLabel()}`)
+  );
   updateSteeringUi();
   if (!canSendNow) return;
   scheduleSteeringQueueProcessing(0);

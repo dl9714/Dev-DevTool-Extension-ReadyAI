@@ -192,88 +192,110 @@ function detectGeminiGenerating() {
   const btns = qsa('[aria-label*="중지"], [aria-label*="Stop"], [aria-label*="stop"]');
   return btns.some((btn) => isVisible(btn) && isEnabledButtonLike(btn));
 }
-function detectAiStudioGenerating() {
-  // AI Studio는 "Run" 버튼이 사라지고 "Stop" 전용 요소가 생기거나,
-  // Material icon이 fonticon/innerText로 stop 계열을 표시하는 경우가 많다.
-  // 또한 일부 구성은 오픈 shadowRoot 아래에 버튼이 들어가므로 qsa(deep query) 사용.
-  // 0) 명시적 stop 버튼
-  const stopButtonSelectors = [
+function shouldInferAiStudioGeneratingFromRunButton(options = {}) {
+  if (!options.composerVisible || options.runButtonVisible) return false;
+  return !!(
+    options.runRequestedRecently
+    || options.wasGenerating
+    || options.awaitingResponseStart
+    || options.awaitingTurnCompletion
+  );
+}
+function getVisibleAiStudioRunButtons() {
+  const candidates = qsa('ms-run-button button,button.ctrl-enter-submits,ms-run-button');
+  const seen = new Set();
+  const out = [];
+  for (const el of candidates) {
+    if (!el || seen.has(el) || !isVisible(el)) continue;
+    const aria = (el.getAttribute?.('aria-label') || '').trim();
+    const title = (el.getAttribute?.('title') || '').trim();
+    const tooltip = (el.getAttribute?.('mattooltip') || '').trim();
+    const text = (el.innerText || el.textContent || '').trim();
+    const hay = `${aria} ${title} ${tooltip} ${text}`.trim();
+    if (!/(\brun\b|실행)/i.test(hay) || /(\bstop\b|\bcancel\b|중지|취소)/i.test(hay)) continue;
+    seen.add(el);
+    out.push(el);
+  }
+  return out;
+}
+function hasVisibleAiStudioComposer() {
+  const candidates = qsa([
+    'ms-prompt-box',
+    'textarea[aria-label="Enter a prompt"]',
+    'textarea[placeholder*="prompt" i]',
+    'textarea[placeholder*="입력"]',
+  ].join(','));
+  return candidates.some((el) => isVisible(el));
+}
+function clearAiStudioGenerationProbeBurst(options = {}) {
+  for (const timer of aiStudioGenerationProbeTimers) {
+    try { clearTimeout(timer); } catch (_) {}
+  }
+  aiStudioGenerationProbeTimers = [];
+  if (options.resetRequest !== false) aiStudioRunRequestedAt = 0;
+}
+function armAiStudioGenerationProbeBurst() {
+  if (getSiteKey() !== 'aistudio') return false;
+  clearAiStudioGenerationProbeBurst({ resetRequest: false });
+  aiStudioRunRequestedAt = Date.now();
+  ensurePolling(true);
+  const delays = [0, 90, 220, 500, 900, 1500, 2600, 4500, 7500];
+  for (const delay of delays) {
+    aiStudioGenerationProbeTimers.push(window.setTimeout(() => scheduleCheck(true), delay));
+  }
+  return true;
+}
+function isAiStudioComposerEventTarget(target) {
+  if (!target || getSiteKey() !== 'aistudio' || isSteeringTarget(target)) return false;
+  const composer = getActiveComposer();
+  if (!composer) return false;
+  try { return target === composer || composer.contains(target); } catch (_) { return false; }
+}
+function noteAiStudioPossibleRun(event) {
+  if (!event || getSiteKey() !== 'aistudio' || isSteeringTarget(event.target)) return;
+  if (event.type === 'keydown') {
+    if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.isComposing) return;
+    if (!event.ctrlKey && !event.metaKey) return;
+    if (!isAiStudioComposerEventTarget(event.target)) return;
+    armAiStudioGenerationProbeBurst();
+    return;
+  }
+  if (event.type !== 'click') return;
+  let control = null;
+  try { control = event.target?.closest?.('button, ms-run-button') || null; } catch (_) { control = null; }
+  if (!control || !isVisible(control)) return;
+  const hay = `${control.getAttribute?.('aria-label') || ''} ${control.getAttribute?.('title') || ''} ${control.innerText || control.textContent || ''}`;
+  if (!/(\brun\b|실행)/i.test(hay) || /(\bstop\b|\bcancel\b|중지|취소)/i.test(hay)) return;
+  armAiStudioGenerationProbeBurst();
+}
+function hasVisibleAiStudioStopControl() {
+  const selector = [
     'ms-stop-button',
     'button[aria-label*="Stop"]',
     'button[aria-label*="stop"]',
     'button[aria-label*="중지"]',
     'button[title*="Stop"]',
     'button[title*="중지"]',
-  ];
-  for (const sel of stopButtonSelectors) {
-    const els = qsa(sel);
-    if (els.some((e) => isVisible(e))) return true;
+  ].join(',');
+  return qsa(selector).some((el) => isVisible(el) && isEnabledButtonLike(el));
+}
+function getVisibleAiStudioSignalScopes() {
+  const scopes = [];
+  const seen = new Set();
+  const add = (el) => {
+    if (!el || seen.has(el) || !isVisible(el)) return;
+    seen.add(el);
+    scopes.push(el);
+  };
+  for (const composer of qsa('ms-prompt-box,textarea[aria-label="Enter a prompt"],textarea[placeholder*="prompt" i],textarea[placeholder*="입력"]')) {
+    if (!isVisible(composer)) continue;
+    add(composer);
+    try { add(composer.closest?.('footer')); } catch (_) {}
   }
-  // 1) Run 버튼이 "Stop"으로 바뀌는 케이스(텍스트/aria-label 기반)
-  const runBtnSelectors = [
-    'ms-run-button button.run-button',
-    'ms-run-button button[type="submit"]',
-    'button.run-button',
-    'button[aria-label="Run"]',
-    'button[aria-label*="Run"]',
-  ];
-  const RUN_STOP_RE = /(\bstop\b|\bcancel\b|중지|취소)/i;
-  for (const sel of runBtnSelectors) {
-    const btns = qsa(sel);
-    for (const btn of btns) {
-      if (!isVisible(btn)) continue;
-      const aria = (btn.getAttribute?.('aria-label') || '').trim();
-      const title = (btn.getAttribute?.('title') || '').trim();
-      const txt = (btn.innerText || btn.textContent || '').trim();
-      const hay = `${aria} ${title} ${txt}`.trim();
-      if (hay && RUN_STOP_RE.test(hay)) return true;
-      // 아이콘으로만 표시되는 케이스
-      const iconCandidates = [
-        ...(btn.querySelectorAll?.('mat-icon') ? Array.from(btn.querySelectorAll('mat-icon')) : []),
-        ...(btn.querySelectorAll?.('.material-symbols-outlined') ? Array.from(btn.querySelectorAll('.material-symbols-outlined')) : []),
-      ];
-      for (const icon of iconCandidates) {
-        if (!icon) continue;
-        const iconText = (icon.textContent || '').trim().toLowerCase();
-        const fontIcon = (icon.getAttribute?.('fonticon') || '').trim().toLowerCase();
-        const svgIcon = (icon.getAttribute?.('svgicon') || '').trim().toLowerCase();
-        const iconHay = `${iconText} ${fontIcon} ${svgIcon}`.trim();
-        if (!iconHay) continue;
-        if (/(\bstop\b|stop_circle|stop_circle_filled|cancel)/i.test(iconHay)) return true;
-      }
-    }
-  }
-  // 2) Material icon (fonticon/innerText) 기반 stop
-  const iconSelectors = [
-    // fonticon으로 stop을 쓰는 케이스
-    'button mat-icon[fonticon="stop"]',
-    'button mat-icon[fonticon="stop_circle"]',
-    'mat-icon[fonticon="stop"]',
-    'mat-icon[fonticon="stop_circle"]',
-    // svgicon 기반
-    'button mat-icon[svgicon*="stop"]',
-    'mat-icon[svgicon*="stop"]',
-    // material symbols(outlined) text 기반
-    'button .material-symbols-outlined:not([class*="keyboard"])',
-    '.material-symbols-outlined:not([class*="keyboard"])',
-    // 일반 mat-icon 텍스트
-    'button mat-icon',
-    'mat-icon',
-  ];
-  for (const sel of iconSelectors) {
-    const els = qsa(sel);
-    for (const el of els) {
-      if (!isVisible(el)) continue;
-      const t = (el.textContent || '').trim().toLowerCase();
-      const fontIcon = (el.getAttribute?.('fonticon') || '').trim().toLowerCase();
-      const svgIcon = (el.getAttribute?.('svgicon') || '').trim().toLowerCase();
-      const hay = `${t} ${fontIcon} ${svgIcon}`.trim();
-      if (!hay) continue;
-      if (/(\bstop\b|stop_circle|stop_circle_filled|\bcancel\b)/i.test(hay)) return true;
-    }
-  }
-  // 3) 로딩/프로그레스 인디케이터
-  const progressSelectors = [
+  return scopes;
+}
+function hasVisibleAiStudioScopedActivitySignal() {
+  const selector = [
     '.mat-progress-spinner',
     '.mat-mdc-progress-spinner',
     'mat-progress-spinner',
@@ -281,15 +303,47 @@ function detectAiStudioGenerating() {
     '.mat-progress-bar',
     '.mat-mdc-progress-bar',
     'mat-progress-bar',
-  ];
-  for (const sel of progressSelectors) {
-    const els = qsa(sel);
-    if (els.some((e) => isVisible(e))) return true;
+    '[aria-busy="true"]',
+    'button mat-icon',
+    'button .material-symbols-outlined',
+  ].join(',');
+  const stopIconRe = /(\bstop\b|stop_circle|stop_circle_filled|\bcancel\b|중지|취소)/i;
+  const seen = new Set();
+  for (const scope of getVisibleAiStudioSignalScopes()) {
+    let candidates = [];
+    try { candidates = Array.from(scope.querySelectorAll(selector)); } catch (_) { candidates = []; }
+    for (const el of candidates) {
+      if (!el || seen.has(el) || !isVisible(el)) continue;
+      seen.add(el);
+      if (el.matches?.('.mat-progress-spinner,.mat-mdc-progress-spinner,mat-progress-spinner,mat-spinner,.mat-progress-bar,.mat-mdc-progress-bar,mat-progress-bar,[aria-busy="true"]')) {
+        return true;
+      }
+      const text = (el.textContent || '').trim();
+      const fontIcon = (el.getAttribute?.('fonticon') || '').trim();
+      const svgIcon = (el.getAttribute?.('svgicon') || '').trim();
+      if (stopIconRe.test(`${text} ${fontIcon} ${svgIcon}`)) return true;
+    }
   }
-  // 4) aria-busy 힌트
-  const busy = qsa('[aria-busy="true"]');
-  if (busy.some((e) => isVisible(e))) return true;
   return false;
+}
+function detectAiStudioGenerating() {
+  const runButtonVisible = getVisibleAiStudioRunButtons().length > 0;
+  const composerVisible = hasVisibleAiStudioComposer();
+  const runRequestedRecently = !!(
+    aiStudioRunRequestedAt
+    && Date.now() - aiStudioRunRequestedAt <= 15000
+  );
+  const inferredFromRunButton = shouldInferAiStudioGeneratingFromRunButton({
+    composerVisible,
+    runButtonVisible,
+    runRequestedRecently,
+    wasGenerating: isGenerating,
+    awaitingResponseStart: steeringAwaitingResponseStart,
+    awaitingTurnCompletion: steeringAwaitingTurnCompletion,
+  });
+  if (inferredFromRunButton) return true;
+  if (hasVisibleAiStudioStopControl()) return true;
+  return hasVisibleAiStudioScopedActivitySignal();
 }
 function detectClaudeGenerating() {
   // Claude: 버튼 텍스트에 "Stop"이 포함되어 있는지 확인
@@ -364,6 +418,7 @@ function checkStatus() {
       clearSteeringAwaitingResponseStart();
       markSteeringGenerationObserved();
     } else {
+      if (platform === 'aistudio') clearAiStudioGenerationProbeBurst();
       completionStatus = 'completed';
       steeringLastCompletionAt = Date.now();
       // Completion may queue/follow up work, but the panel itself only opens via the launcher click.

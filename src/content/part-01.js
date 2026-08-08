@@ -47,11 +47,11 @@ var _lastHeartbeatAt = 0;
 //   MutationObserver(childList)만으로는 "중지 버튼 사라짐"을 못 잡고 🟠가 유지될 수 있음.
 // - 따라서 attributes 감시 + 주기 폴링(setInterval)을 같이 사용한다.
 var CHECK_INTERVAL_ACTIVE_MS = 650;
-var CHECK_INTERVAL_VISIBLE_IDLE_MS = 3000;
+var CHECK_INTERVAL_VISIBLE_IDLE_MS = 5000;
 var CHECK_INTERVAL_HIDDEN_ACTIVE_MS = 1800;
 var CHECK_INTERVAL_HIDDEN_IDLE_MS = 60000;
 var MIN_CHECK_GAP_ACTIVE_MS = 400;
-var MIN_CHECK_GAP_IDLE_MS = 1000;
+var MIN_CHECK_GAP_IDLE_MS = 1500;
 var MIN_CHECK_GAP_HIDDEN_ACTIVE_MS = 1200;
 var MIN_CHECK_GAP_HIDDEN_IDLE_MS = 3000;
 var _checkScheduled = false;
@@ -59,6 +59,8 @@ var _checkTimer = null;
 var _lastCheckAt = 0;
 var _currentPollingMs = 0;
 var _statusQueryCache = null;
+var aiStudioRunRequestedAt = 0;
+var aiStudioGenerationProbeTimers = [];
 function isChatGptSafeMode() {
   try {
     const siteKey = getSiteKey?.();

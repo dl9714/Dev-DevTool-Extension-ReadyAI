@@ -17,6 +17,8 @@ function bindHandlersOnce() {
   document.addEventListener('click', markAsAcknowledged, true);
   document.addEventListener('scroll', markAsAcknowledged, true);
   document.addEventListener('wheel', markAsAcknowledged, { passive: true, capture: true });
+  document.addEventListener('click', noteAiStudioPossibleRun, true);
+  document.addEventListener('keydown', noteAiStudioPossibleRun, true);
   document.addEventListener('keydown', handleChatGptNativeComposerFollowupEnter, true);
   document.addEventListener('keydown', markTypingAcknowledged, true);
   document.addEventListener('input', markTypingAcknowledged, true);
@@ -79,6 +81,7 @@ function startMonitoring(site) {
   monitoring = true;
   isGenerating = false;
   completionStatus = 'idle';
+  clearAiStudioGenerationProbeBurst();
   hasSentInitialState = false;
   const chatGptSafeMode = chatGptSafeModeCandidate;
   if (!hasCustomTabTitle()) nativePageTitle = getCleanDocumentTitleText() || activeSite?.name || 'AI';
@@ -124,6 +127,7 @@ function stopMonitoring() {
   activeSite = null;
   isGenerating = false;
   completionStatus = 'idle';
+  clearAiStudioGenerationProbeBurst();
   hasSentInitialState = false;
   if (checkInterval) {
     clearInterval(checkInterval);

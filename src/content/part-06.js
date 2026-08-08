@@ -297,6 +297,27 @@ function shouldDropRuntimeSteeringEnqueue(signature) {
   steeringLastRuntimeEnqueueAt = now;
   return false;
 }
+function shouldHoldInitialChatGptQueueItem(item, options = {}) {
+  if (!item?.holdForFirstChatGptTurn) return false;
+  if (String(options.siteKey || '') !== 'chatgpt') return false;
+  if (options.hasConversationTurns) return false;
+  return options.allowHeldFirstTurn !== true;
+}
+function shouldHoldSteeringQueueHeadForFirstChatGptTurn(options = {}) {
+  const item = steeringQueue[0];
+  if (!item?.holdForFirstChatGptTurn) return false;
+  const siteKey = getSiteKey();
+  const hasConversationTurns = siteKey === 'chatgpt' && hasChatGptConversationTurns();
+  if (siteKey !== 'chatgpt' || hasConversationTurns) {
+    item.holdForFirstChatGptTurn = false;
+    return false;
+  }
+  return shouldHoldInitialChatGptQueueItem(item, {
+    siteKey,
+    hasConversationTurns,
+    allowHeldFirstTurn: options.allowHeldFirstTurn === true,
+  });
+}
 function enqueueSteeringPrompt(text, options = {}) {
   const value = String(text || '').trim();
   const files = (Array.isArray(options.files) ? options.files : (Array.isArray(options.images) ? options.images : [])).filter((item) => item?.file);
@@ -314,6 +335,7 @@ function enqueueSteeringPrompt(text, options = {}) {
     images: files, // 기존 내부 호출 호환용
     createdAt: Date.now(),
     retryCount: 0,
+    holdForFirstChatGptTurn: options.holdForFirstChatGptTurn === true,
   };
   steeringQueue = [...steeringQueue, item];
   return item;
@@ -433,6 +455,7 @@ function scheduleSteeringQueueProcessing(delay = STEERING_AUTO_SEND_DELAY_MS) {
   clearSteeringAutoSendTimer();
   if (!monitoring || !steeringEnabled) return;
   if (!steeringQueue.length) return;
+  if (shouldHoldSteeringQueueHeadForFirstChatGptTurn()) return;
   if (!canAutoSendSteeringNow()) {
     if (isSteeringTurnWatchdogMature()) recoverStaleSteeringTurnWait('schedule_queue');
     return;
