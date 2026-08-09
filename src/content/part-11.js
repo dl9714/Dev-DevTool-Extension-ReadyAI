@@ -384,6 +384,9 @@ function checkStatus() {
     // open shadowRoot가 동적으로 생기는 사이트(특히 Gemini) 대비
     maybeRescanShadowRoots();
     currentlyGenerating = detectGenerating(activeSite);
+    // AI Studio처럼 입력창이 늦게 생기면 최초 배치는 viewport fallback을 쓴다.
+    // DOM 감시가 다시 실행된 시점에 실제 입력창 앵커로 자동 복귀시킨다.
+    refreshFallbackSteeringPosition();
     if (!currentlyGenerating && platform === 'chatgpt') {
       observeSteeringChatGptAssistantTurn();
       if (

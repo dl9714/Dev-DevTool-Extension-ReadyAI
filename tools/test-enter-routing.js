@@ -89,9 +89,9 @@ assert.deepEqual(repeatedModes, ['queue', 'queue', 'queue', 'queue', 'immediate'
 const background = fs.readFileSync(path.join(root, 'src', 'background.js'), 'utf8');
 const content = fs.readFileSync(path.join(root, 'src', 'content', 'part-02.js'), 'utf8');
 const popup = fs.readFileSync(path.join(root, 'src', 'popup.html'), 'utf8');
-assert.match(background, /2026-08-08\.4-chatgpt-repeated-ctrl-enter/);
-assert.match(content, /2026-08-08\.4-chatgpt-repeated-ctrl-enter/);
-assert.match(popup, /Ready_Ai 0\.3\.9 · 2026-08-08\.4/);
+assert.match(background, /2026-08-09\.4-gemini-stable-launcher-dock/);
+assert.match(content, /2026-08-09\.4-gemini-stable-launcher-dock/);
+assert.match(popup, /Ready_Ai 0\.3\.9 · 2026-08-09\.4/);
 const part07 = fs.readFileSync(path.join(root, 'src', 'content', 'part-07.js'), 'utf8');
 assert.match(part07, /options\.source === 'resume_button'/);
 assert.match(part07, /enqueueSteeringPrompt\(text, \{ files, holdForFirstChatGptTurn \}\)/);

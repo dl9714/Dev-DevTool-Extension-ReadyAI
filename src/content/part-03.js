@@ -503,6 +503,12 @@ function applySteeringTheme() {
 function getSteeringAnchorElement() {
   const composer = getActiveComposer();
   if (!composer) return null;
+  if (getSiteKey() === 'gemini') {
+    // Gemini의 실제 입력창은 텍스트 편집기 오른쪽에 모델 선택/마이크 영역을
+    // 더 포함한다. 편집기에 맞추면 런처가 채팅 중앙에 남으므로 외곽 입력창을 쓴다.
+    const inputArea = composer.closest?.('input-area-v2, fieldset.input-area-container, .input-area-container, .input-area');
+    if (inputArea && isVisible(inputArea)) return inputArea;
+  }
   const form = composer.closest?.('form');
   if (form && isVisible(form)) return form;
   const group = composer.closest?.('[data-testid], [role="group"], [role="presentation"]');
@@ -568,6 +574,11 @@ function applySteeringViewportSizeVars(bottomPx = 140) {
     steeringHost.style.setProperty('--ready-ai-queue-list-max-height', `${queueListMax}px`);
   } catch (_) {}
 }
+function getSteeringStableBottom(siteKey = getSiteKey()) {
+  if (siteKey === 'chatgpt') return 122;
+  if (siteKey === 'gemini') return 111;
+  return null;
+}
 function positionSteeringUi(force = false) {
   if (!steeringHost) return;
   const anchor = getSteeringAnchorElement();
@@ -575,13 +586,17 @@ function positionSteeringUi(force = false) {
   if (anchor) {
     try {
       const rect = anchor.getBoundingClientRect();
-      const isChatGpt = getSiteKey() === 'chatgpt';
+      const siteKey = getSiteKey();
+      const isChatGpt = siteKey === 'chatgpt';
       const chatGptRightShift = isChatGpt ? 250 : 0;
       const chatGptScrollbarGutter = isChatGpt ? 12 : 0;
       const right = Math.max(12 + chatGptScrollbarGutter, Math.round(window.innerWidth - rect.right - chatGptRightShift + chatGptScrollbarGutter));
-      const bottomAnchor = isChatGpt ? (window.innerHeight - 122) : (rect.top - 10);
-      const bottom = Math.max(12, Math.round(window.innerHeight - bottomAnchor));
-      const signature = `${right}|${bottom}|${isChatGpt ? 'chatgpt-stable' : 'anchor'}|${layoutKey}`;
+      const stableBottom = getSteeringStableBottom(siteKey);
+      const bottom = stableBottom == null
+        ? Math.max(12, Math.round(window.innerHeight - (rect.top - 10)))
+        : stableBottom;
+      const verticalMode = stableBottom == null ? 'anchor' : `${siteKey}-stable`;
+      const signature = `${right}|${bottom}|${verticalMode}|${layoutKey}`;
       if (!force && steeringLastPositionSignature === signature) return;
       steeringLastPositionSignature = signature;
       steeringHost.style.left = 'auto';
@@ -603,14 +618,21 @@ function positionSteeringUi(force = false) {
     applySteeringViewportSizeVars(18);
     return;
   }
-  const fallbackSignature = `18|140|${layoutKey}`;
+  const siteFallbackBottom = getSteeringStableBottom();
+  const fallbackBottom = siteFallbackBottom == null ? 140 : siteFallbackBottom;
+  const fallbackSignature = `18|${fallbackBottom}|fallback|${layoutKey}`;
   if (!force && steeringLastPositionSignature === fallbackSignature) return;
   steeringLastPositionSignature = fallbackSignature;
   steeringHost.style.left = 'auto';
   steeringHost.style.transform = 'none';
   steeringHost.style.right = '18px';
-  steeringHost.style.bottom = '140px';
-  applySteeringViewportSizeVars(140);
+  steeringHost.style.bottom = `${fallbackBottom}px`;
+  applySteeringViewportSizeVars(fallbackBottom);
+}
+function refreshFallbackSteeringPosition() {
+  if (!steeringHost || !String(steeringLastPositionSignature || '').includes('|fallback|')) return false;
+  positionSteeringUi();
+  return true;
 }
 function fitOpenSteeringUiInsideViewport() {
   if (!steeringHost || !steeringPanelOpen) return;
