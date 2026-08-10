@@ -22,15 +22,16 @@ Gemini and AI Studio use Google AI title safe mode. Do not inject the main-world
 
 ## Injection Rules
 
-The extension must not declare the full split content scripts as default
-`content_scripts` in `manifest.json`.
+The extension must not declare the full split content scripts for ChatGPT in
+`manifest.json`. ChatGPT uses only `src/content/chatgpt-bootstrap.js`, matched
+to top frames. The shim sends `ensure_content_for_current_chatgpt_tab`, then
+the background injects the split files into that same top frame. Do not add
+`all_frames`, `match_about_blank`, or the full `part-*.js` files to the ChatGPT
+manifest entry.
 
-The only allowed declarative content script is
-`src/content/chatgpt-bootstrap.js`, matched to ChatGPT top frames only. It is a
-tiny wake-up shim: it sends `ensure_content_for_current_chatgpt_tab` from the
-current ChatGPT tab, then the background injects the full split files into that
-same top frame. Do not add `all_frames`, `match_about_blank`, non-ChatGPT
-matches, or the full `part-*.js` files to the manifest.
+Gemini, AI Studio, and the other non-ChatGPT built-ins use the manifest-managed
+split content entry, top-frame-only. This lets Chrome perform their normal
+`document_idle` injection without background all-frame probing.
 
 The background service worker manually injects the full content scripts only
 for the current ChatGPT tab that requested bootstrap, active ChatGPT tabs,
@@ -38,6 +39,8 @@ queued ChatGPT tabs, or an explicit popup target tab. For ChatGPT, full
 injection must stay top-frame-only.
 
 When a top-level ChatGPT URL loads, the background must ensure the content script even if the tab-active cache is stale. Chrome can emit URL/status events before this extension's active-tab metadata catches up, which otherwise makes newly opened ChatGPT tabs miss the follow-up launcher. This is safe only because ChatGPT injection remains top-frame-only and `readyAiContentVersion` stays stable.
+
+After an extension reload or update, Chrome does not automatically reinject manifest-managed content scripts into already-open Gemini or AI Studio pages. A completed top-level page may therefore retain a dead Ready_Ai host whose extension context no longer answers messages. Wait for normal `document_idle` injection first; only when the page is already complete and repeated ping attempts get no response may the background inject the split files once for recovery. Never recovery-inject over a responsive content instance.
 
 Manual injection load order:
 

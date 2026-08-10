@@ -89,9 +89,14 @@ assert.deepEqual(repeatedModes, ['queue', 'queue', 'queue', 'queue', 'immediate'
 const background = fs.readFileSync(path.join(root, 'src', 'background.js'), 'utf8');
 const content = fs.readFileSync(path.join(root, 'src', 'content', 'part-02.js'), 'utf8');
 const popup = fs.readFileSync(path.join(root, 'src', 'popup.html'), 'utf8');
-assert.match(background, /2026-08-09\.4-gemini-stable-launcher-dock/);
-assert.match(content, /2026-08-09\.4-gemini-stable-launcher-dock/);
-assert.match(popup, /Ready_Ai 0\.3\.9 · 2026-08-09\.4/);
+assert.match(background, /2026-08-10\.2-gemini-quill-replace/);
+assert.match(content, /2026-08-10\.2-gemini-quill-replace/);
+assert.match(popup, /Ready_Ai 0\.3\.9 · 2026-08-10\.2/);
+assert.match(popup, /version-pill">0\.3\.9 · 2026-08-10\.2</);
+assert.match(background, /stage: 'composer_busy'/);
+assert.match(background, /document\.execCommand\('selectAll', false, null\)/);
+assert.match(background, /inputType: 'insertReplacementText'/);
+assert.match(background, /paragraph\.appendChild\(document\.createTextNode\(next\)\)/);
 const part07 = fs.readFileSync(path.join(root, 'src', 'content', 'part-07.js'), 'utf8');
 assert.match(part07, /options\.source === 'resume_button'/);
 assert.match(part07, /enqueueSteeringPrompt\(text, \{ files, holdForFirstChatGptTurn \}\)/);

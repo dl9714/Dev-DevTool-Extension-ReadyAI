@@ -67,7 +67,7 @@ const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
 const READY_AI_CONTENT_VERSION = '2026-06-12.21-single-queue-dispatch';
-const READY_AI_CONTENT_BUILD_VERSION = '2026-08-09.4-gemini-stable-launcher-dock';
+const READY_AI_CONTENT_BUILD_VERSION = '2026-08-10.2-gemini-quill-replace';
 const READY_AI_CANONICAL_EXTENSION_ID = 'jmgnmeaiahlpbbgnocmognokfecofkma';
 const READY_AI_LEGACY_MIRROR_EXTENSION_ID = 'ajnolilmicdilijebljgchoodgajnfeg';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
@@ -102,6 +102,11 @@ function isManifestManagedContentUrl(url) {
   } catch (_) {
     return false;
   }
+}
+function shouldRecoverManifestManagedContent(tab, response, options = {}) {
+  if (response?.ok) return false;
+  if (options.forceInject === true) return true;
+  return String(tab?.status || '').toLowerCase() === 'complete';
 }
 function getReadyAiRuntimeId() {
   try {
@@ -1029,6 +1034,91 @@ async function triggerGoogleDebuggerNativeSteer(tabId, expectedText, siteKey = '
     }
     const composer = getComposer();
     if (!composer) return { ok: false, sent: false, retryable: true, stage: 'focus', message: 'Google AI 입력창을 찾지 못했습니다.' };
+    const previousText = read(composer);
+    if (previousText && previousText !== expected) {
+      return {
+        ok: false,
+        sent: false,
+        retryable: true,
+        stage: 'composer_busy',
+        after: previousText,
+        message: 'Google AI 입력창에 작성 중인 내용이 있어 후속 지시를 대기합니다.',
+      };
+    }
+    const dispatchReplacementEvents = (el, value) => {
+      const data = String(value || '');
+      try { el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertReplacementText', data })); } catch (_) {}
+      try { el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data })); } catch (_) {
+        try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+      }
+      try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+    };
+    const selectEditableContents = (el) => {
+      try { el.focus({ preventScroll: false }); } catch (_) { try { el.focus(); } catch (_) {} }
+      try { document.execCommand('selectAll', false, null); } catch (_) {}
+      try {
+        const selection = window.getSelection();
+        const anchorInside = !selection?.anchorNode || selection.anchorNode === el || el.contains(selection.anchorNode);
+        const focusInside = !selection?.focusNode || selection.focusNode === el || el.contains(selection.focusNode);
+        if (selection && anchorInside && focusInside && !selection.isCollapsed) return true;
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        selection?.removeAllRanges?.();
+        selection?.addRange?.(range);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    };
+    const replaceEditableText = (el, value) => {
+      const next = String(value || '');
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        selectEditableContents(el);
+        if (attempt > 0) {
+          try { document.execCommand('delete', false, null); } catch (_) {}
+        }
+        let inserted = false;
+        try { inserted = document.execCommand('insertText', false, next); } catch (_) {}
+        if (inserted && read(el) === normalize(next)) return true;
+      }
+      // Gemini의 Quill 편집기는 빈 상태를 <p><br></p>로 관리한다. 단순
+      // textContent 대입은 내부 모델이 이전 값을 되살릴 수 있으므로 동일한
+      // 문단 구조로 교체하고 replacement 이벤트를 보낸다.
+      try {
+        const paragraph = document.createElement('p');
+        paragraph.appendChild(document.createTextNode(next));
+        el.replaceChildren(paragraph);
+        dispatchReplacementEvents(el, next);
+        return read(el) === normalize(next);
+      } catch (_) {
+        return false;
+      }
+    };
+    const clearInsertedText = (el) => {
+      if (!el) return;
+      if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+        try {
+          const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) setter.call(el, '');
+          else el.value = '';
+          dispatchReplacementEvents(el, '');
+        } catch (_) {}
+        return;
+      }
+      try {
+        selectEditableContents(el);
+        document.execCommand('delete', false, null);
+      } catch (_) {}
+      if (read(el)) {
+        try {
+          const paragraph = document.createElement('p');
+          paragraph.appendChild(document.createElement('br'));
+          el.replaceChildren(paragraph);
+          dispatchReplacementEvents(el, '');
+        } catch (_) {}
+      }
+    };
     try { composer.focus({ preventScroll: false }); } catch (_) { try { composer.focus(); } catch (_) {} }
     try {
       if (composer.tagName === 'TEXTAREA' || composer.tagName === 'INPUT') {
@@ -1037,27 +1127,20 @@ async function triggerGoogleDebuggerNativeSteer(tabId, expectedText, siteKey = '
         if (setter) setter.call(composer, String(rawText || ''));
         else composer.value = String(rawText || '');
         composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(rawText || '') }));
-      } else {
-        const selection = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(composer);
-        selection.removeAllRanges();
-        selection.addRange(range);
-        const inserted = document.execCommand('insertText', false, String(rawText || ''));
-        if (!inserted || read(composer) !== expected) {
-          composer.textContent = String(rawText || '');
-          composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(rawText || '') }));
-        }
+      } else if (!replaceEditableText(composer, rawText)) {
+        return { ok: false, sent: false, retryable: true, stage: 'insert', message: 'Google AI 입력창에 지시를 반영하지 못했습니다.' };
       }
     } catch (_) {
       return { ok: false, sent: false, retryable: true, stage: 'insert', message: 'Google AI 입력창에 지시를 반영하지 못했습니다.' };
     }
-    await sleepInPage(180);
-    if (read(composer) !== expected) {
-      return { ok: false, sent: false, retryable: true, stage: 'verify', after: read(composer), message: 'Google AI 편집기 반영을 확인하지 못했습니다.' };
+    await sleepInPage(260);
+    const verifiedComposer = getComposer() || composer;
+    if (read(verifiedComposer) !== expected) {
+      if (!previousText) clearInsertedText(verifiedComposer);
+      return { ok: false, sent: false, retryable: true, stage: 'verify', after: read(verifiedComposer), message: 'Google AI 편집기 반영을 확인하지 못했습니다.' };
     }
     const label = (el) => [el?.getAttribute?.('aria-label'), el?.getAttribute?.('title'), el?.getAttribute?.('data-testid'), el?.getAttribute?.('mattooltip'), el?.innerText, el?.textContent].filter(Boolean).join(' ');
-    const composerRect = composer.getBoundingClientRect();
+    const composerRect = verifiedComposer.getBoundingClientRect();
     const sendPattern = site === 'aistudio' ? /send|보내기|전송|run|실행/i : /send|보내기|전송/i;
     const blockedPattern = /다시\s*(?:실행|시도|생성)|재생성|retry|rerun|regenerate|stop|중지|cancel|abort|mic|voice|upload|첨부|menu|도구|tool/i;
     const findSendButton = () => {
@@ -1082,22 +1165,22 @@ async function triggerGoogleDebuggerNativeSteer(tabId, expectedText, siteKey = '
       await sleepInPage(120);
       button = findSendButton();
     }
-    if (!button) return { ok: false, sent: false, retryable: true, stage: 'button', after: read(composer), message: 'Google AI 보내기 버튼이 활성화되지 않았습니다.' };
+    if (!button) return { ok: false, sent: false, retryable: true, stage: 'button', after: read(verifiedComposer), message: 'Google AI 보내기 버튼이 활성화되지 않았습니다.' };
     try { button.click(); } catch (_) {}
     await sleepInPage(320);
-    if (read(composer) === expected) {
+    if (read(verifiedComposer) === expected) {
       try {
-        const form = button.form || composer.closest?.('form');
+        const form = button.form || verifiedComposer.closest?.('form');
         if (form?.requestSubmit) form.requestSubmit(button);
       } catch (_) {}
       await sleepInPage(220);
     }
-    if (read(composer) === expected) {
+    if (read(verifiedComposer) === expected) {
       try {
-        composer.focus();
+        verifiedComposer.focus();
         const ctrlKey = site === 'aistudio';
-        composer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ctrlKey, bubbles: true, cancelable: true }));
-        composer.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ctrlKey, bubbles: true, cancelable: true }));
+        verifiedComposer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ctrlKey, bubbles: true, cancelable: true }));
+        verifiedComposer.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ctrlKey, bubbles: true, cancelable: true }));
       } catch (_) {}
     }
     const deadline = Date.now() + 5200;
@@ -1236,9 +1319,10 @@ async function ensureContentScripts(tab, options = {}) {
     return true;
   }
   // 매니페스트에 등록된 기본 사이트는 document_idle에서 Chrome이 직접 주입한다.
-  // 탭 이벤트와 document_idle의 짧은 경합 때문에 여기서 같은 파일을 다시 실행하면
-  // 기존 MutationObserver/타이머의 참조가 유실되어 중복 감시와 CPU 폭증이 발생한다.
-  // 따라서 기본 사이트는 잠시 기다려 ping만 재확인하고, 수동 재주입하지 않는다.
+  // 탭 이벤트와 document_idle의 짧은 경합을 피하려고 먼저 충분히 기다린다.
+  // 다만 확장 reload/update 뒤의 기존 탭은 Chrome이 content script를 다시 넣지 않아
+  // DOM 껍데기만 남고 클릭/메시지가 모두 죽을 수 있다. 문서가 이미 complete이고
+  // ping 응답도 전혀 없을 때만 복구 주입해 중복 observer/timer를 만들지 않는다.
   if (isManifestManagedContentUrl(url)) {
     for (const waitMs of [120, 320, 700]) {
       await sleep(waitMs);
@@ -1249,7 +1333,7 @@ async function ensureContentScripts(tab, options = {}) {
         return true;
       }
     }
-    return false;
+    if (!shouldRecoverManifestManagedContent(tab, alive, options)) return false;
   }
   // 2) 없으면 강제 주입(필요 권한: "scripting")
   let injected = await pScriptingExec(tabId, CONTENT_SCRIPT_FILES, injectAllFrames);
@@ -1259,7 +1343,7 @@ async function ensureContentScripts(tab, options = {}) {
   // 3) 주입 직후 즉시 체크 요청
   const reinjected = await pTabsSendMessageResult(tabId, { action: 'ping', topFrameOnly }, 1500, messageOptions);
   await pTabsSendMessage(tabId, { action: 'force_check', reason: 'inject', topFrameOnly }, messageOptions);
-  return !!reinjected?.ok;
+  return isCurrentBuild(reinjected);
 }
 async function ensureContentForPopupTab(tabId, reason = 'popup') {
   if (isReadyAiPassiveDuplicateBackground()) return { ok: false, message: 'passive duplicate Ready_Ai instance' };
@@ -3195,7 +3279,7 @@ function purgeDisabledTabs() {
     if (removedAny) ensureSteeringQueueProbeAlarm();
   });
 }
-async function kickActiveChatGptTabs(reason) {
+async function kickActivePrimaryAiTabs(reason) {
   if (isReadyAiPassiveDuplicateBackground()) return;
   getSiteConfig(async () => {
     const tabs = await pTabsQuery({ active: true });
@@ -3205,7 +3289,7 @@ async function kickActiveChatGptTabs(reason) {
       const url = t.url || '';
       const site = resolveSiteForUrl(url);
       if (!site) continue; // 등록/활성된 사이트만
-      if (!isChatGptUrl(url)) continue;
+      if (!isChatGptUrl(url) && !isGoogleAiUrl(url)) continue;
       // 상태가 비어 있으면 최소 WHITE(표시는 연두색)라도 찍어서 "완전 공백"을 방지
       if (!tabStates[t.id]) {
         tabStates[t.id] = {
@@ -3219,7 +3303,8 @@ async function kickActiveChatGptTabs(reason) {
         seeded = true;
         updateIcon(t.id);
       }
-      // content가 없으면 주입해서 title 뱃지도 복구
+      // 확장 reload/update 뒤 현재 활성 GPT/Gemini/AI Studio 탭의 죽은
+      // content context만 최상위 프레임에서 복구한다.
       safeActionCall(ensureContentScripts(t, { allFrames: false, topFrameOnly: true, frameId: 0 }));
       safeActionCall(pTabsSendMessage(t.id, { action: 'force_check', reason: reason || 'kick', topFrameOnly: true }, { frameId: 0 }));
     }
@@ -3228,12 +3313,12 @@ async function kickActiveChatGptTabs(reason) {
 }
 try {
   chrome.runtime.onStartup.addListener(() => {
-    safeActionCall(kickActiveChatGptTabs('onStartup'));
+    safeActionCall(kickActivePrimaryAiTabs('onStartup'));
   });
 } catch (_) {}
 try {
   chrome.runtime.onInstalled.addListener(() => {
-    safeActionCall(kickActiveChatGptTabs('onInstalled'));
+    safeActionCall(kickActivePrimaryAiTabs('onInstalled'));
   });
 } catch (_) {}
-safeActionCall(kickActiveChatGptTabs('sw_init_active'));
+safeActionCall(kickActivePrimaryAiTabs('sw_init_active'));

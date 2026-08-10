@@ -85,6 +85,7 @@ Do not bump `READY_AI_CONTENT_VERSION` just to mark a build. That string is the 
 17. `ChatGPT 후속 대기` 카드 자체에는 세로/가로 스크롤바를 만들지 않는다. 스크롤은 대기 목록에만 허용하고, 카드 높이 문제는 입력창/파일 드롭 영역을 더 슬림하게 줄여 해결한다.
 18. ChatGPT 페이지 오른쪽 스크롤바와 후속 지시 패널 오른쪽 끝이 겹치면 안 된다. ChatGPT에서는 패널을 스크롤바에서 소폭 왼쪽으로 띄운다.
 19. ChatGPT가 생성 중일 때 대기 항목의 `바로 반영`은 현재 응답을 중지 버튼으로 끊으면 안 된다. 선택한 항목을 ChatGPT 기본 입력창에 반영하고 실제 Ctrl/Cmd+Enter와 같은 현재 작업 조정 경로만 사용해야 한다. 이 경로를 확인하지 못하면 일반 Enter로 폴백해 ChatGPT의 다음 대기열에 넣지 않고 Ready_Ai 대기 항목을 그대로 보존한다. 일반 자동 대기열 전송에는 이 우회 경로를 적용하지 않는다.
+20. Gemini의 Quill 작성기는 단순 `textContent` 대입으로 덮어쓰지 않는다. 작성기에 사용자 초안이 있으면 후속 지시를 대기하고, 빈 작성기에는 편집 명령으로 전체 선택 후 교체하며 Quill의 `<p>` 문단 구조와 replacement input 이벤트를 유지한다. 반영 검증 실패 시 잘못 삽입된 문자열을 지워 다음 재시도에 누적되지 않게 한다.
 
 ### ChatGPT 다중 탭 감시 범위
 1. ChatGPT 후속 지시 감시는 top frame 기준으로만 동작해야 한다.
@@ -93,8 +94,8 @@ Do not bump `READY_AI_CONTENT_VERSION` just to mark a build. That string is the 
 4. 큐가 없는 평상시에는 후속 지시 probe alarm을 꺼두어야 한다.
 5. 여러 ChatGPT 탭이 열려 있어도 probe는 큐가 있는 탭 ID 중 한 번에 소수 탭만 순환 처리해야 한다. 모든 Chrome 탭이나 모든 iframe을 동시에 깨우는 방식으로 되돌리면 안 된다.
 6. 새 채팅 분산 전송처럼 명시적으로 필요한 경우를 제외하고 ChatGPT content script를 all frames로 강제 재주입하면 안 된다.
-7. `manifest.json`에는 full content script 자동 주입을 두지 않는다. 허용되는 자동 주입은 ChatGPT top frame 전용 `src/content/chatgpt-bootstrap.js`뿐이며, 실제 content script는 background가 요청한 ChatGPT 탭 하나, 활성 ChatGPT 탭, 또는 큐가 있는 ChatGPT 탭에만 수동 주입한다.
-8. service worker 시작 시 전체 탭을 훑어서 content script를 주입하는 `kickAllTabs`류 동작을 넣으면 안 된다. 시작/설치/초기화 시에는 활성 ChatGPT 탭만 가볍게 확인한다.
+7. `manifest.json`의 ChatGPT 항목에는 full content script 자동 주입을 두지 않는다. ChatGPT에는 top frame 전용 `src/content/chatgpt-bootstrap.js`만 자동 주입하며, 실제 content script는 background가 요청한 ChatGPT 탭 하나, 활성 ChatGPT 탭, 또는 큐가 있는 ChatGPT 탭에만 수동 주입한다. Gemini/AI Studio 등 비-ChatGPT 기본 사이트의 top-frame manifest 주입은 유지한다.
+8. service worker 시작 시 전체 탭을 훑어서 content script를 주입하는 `kickAllTabs`류 동작을 넣으면 안 된다. 시작/설치/초기화 시에는 각 창의 활성 ChatGPT/Gemini/AI Studio 탭만 가볍게 확인한다. manifest 관리 탭은 로딩 완료 상태이고 반복 ping에 응답이 전혀 없을 때만 죽은 확장 컨텍스트 복구용으로 한 번 재주입할 수 있다.
 9. 큐도 없고 생성 중도 아닌 숨김 ChatGPT 탭은 짧은 주기 polling/keepalive 대상이 아니다. hidden idle 상태는 긴 주기로 유지한다.
 10. 활성 ChatGPT 탭 주입은 사이트 설정 캐시가 늦게 로드되어도 동작해야 한다. ChatGPT 기본 URL은 fallback site로 처리한다.
 11. popup 열기 또는 popup에서 후속 지시 전송/삭제를 누른 경우에는 background가 해당 대상 탭 하나만 content script 주입 보장할 수 있다. ChatGPT 대상은 항상 top frame만 확인한다.
