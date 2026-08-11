@@ -37,6 +37,9 @@ function bindHandlersOnce() {
     scheduleCheck(true);
     wakeSteeringQueueAfterVisibilityRestore('pageshow');
   });
+  window.addEventListener('online', () => {
+    handleReadyAiSystemResume('network_online');
+  });
 }
 // shadow DOM deep-scan / deep-observe는 Gemini 완료 감지 보강용이 핵심이라
 // 기본은 Gemini에서만 켠다.

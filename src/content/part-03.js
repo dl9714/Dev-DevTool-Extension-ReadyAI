@@ -400,6 +400,49 @@ function wakeSteeringQueueAfterVisibilityRestore(reason = 'visibility') {
   scheduleSteeringQueueProcessing(0);
   return true;
 }
+var readyAiResumeRecoveryTimers = [];
+var readyAiLastResumeRecoveryAt = 0;
+function clearReadyAiResumeRecoveryTimers() {
+  for (const timer of readyAiResumeRecoveryTimers.splice(0)) {
+    try { clearTimeout(timer); } catch (_) {}
+  }
+}
+function handleReadyAiSystemResume(reason = 'system_resume') {
+  if (!monitoring) return false;
+  if (typeof isReadyAiDuplicateContentInstance === 'function' && isReadyAiDuplicateContentInstance()) return false;
+  const now = Date.now();
+  if (now - readyAiLastResumeRecoveryAt < 2000) return false;
+  readyAiLastResumeRecoveryAt = now;
+  try {
+    document.documentElement?.setAttribute?.('data-ready-ai-last-resume-reason', String(reason || 'system_resume'));
+    document.documentElement?.setAttribute?.('data-ready-ai-last-resume-at', String(now));
+  } catch (_) {}
+  const refreshAfterResume = () => {
+    if (!monitoring) return;
+    if (typeof isReadyAiDuplicateContentInstance === 'function' && isReadyAiDuplicateContentInstance()) return;
+    ensurePolling(true);
+    if (isChatGptSafeMode()) {
+      try { armChatGptLightTitleBadgeBurst(); } catch (_) {}
+      try { startChatGptLightTitleBadgeKeepAlive(); } catch (_) {}
+    }
+    scheduleCheck(true);
+    wakeSteeringQueueAfterVisibilityRestore(reason);
+  };
+  clearReadyAiResumeRecoveryTimers();
+  refreshAfterResume();
+  for (const delay of [250, 1000, 3000]) {
+    readyAiResumeRecoveryTimers.push(setTimeout(refreshAfterResume, delay));
+  }
+  try {
+    chrome.runtime.sendMessage({
+      action: 'system_resume_detected',
+      reason: reason || 'system_resume',
+    }, () => {
+      try { void chrome.runtime.lastError; } catch (_) {}
+    });
+  } catch (_) {}
+  return true;
+}
 function isSteeringFollowupWaiting() {
   return !!(
     steeringQueue.length

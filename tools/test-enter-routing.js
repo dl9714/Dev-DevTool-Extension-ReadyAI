@@ -89,10 +89,10 @@ assert.deepEqual(repeatedModes, ['queue', 'queue', 'queue', 'queue', 'immediate'
 const background = fs.readFileSync(path.join(root, 'src', 'background.js'), 'utf8');
 const content = fs.readFileSync(path.join(root, 'src', 'content', 'part-02.js'), 'utf8');
 const popup = fs.readFileSync(path.join(root, 'src', 'popup.html'), 'utf8');
-assert.match(background, /2026-08-10\.2-gemini-quill-replace/);
-assert.match(content, /2026-08-10\.2-gemini-quill-replace/);
-assert.match(popup, /Ready_Ai 0\.3\.9 · 2026-08-10\.2/);
-assert.match(popup, /version-pill">0\.3\.9 · 2026-08-10\.2</);
+assert.match(background, /2026-08-12\.1-sleep-resume-recovery/);
+assert.match(content, /2026-08-12\.1-sleep-resume-recovery/);
+assert.match(popup, /Ready_Ai 0\.3\.9 · 2026-08-12\.1/);
+assert.match(popup, /version-pill">0\.3\.9 · 2026-08-12\.1</);
 assert.match(background, /stage: 'composer_busy'/);
 assert.match(background, /document\.execCommand\('selectAll', false, null\)/);
 assert.match(background, /inputType: 'insertReplacementText'/);

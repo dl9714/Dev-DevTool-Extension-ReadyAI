@@ -58,8 +58,12 @@ const STORAGE_KEYS = {
 };
 const GEMINI_PROBE_ALARM = 'ready_ai_gemini_probe';
 const STEERING_QUEUE_PROBE_ALARM = 'ready_ai_steering_queue_probe';
+const SYSTEM_RESUME_ALARM = 'ready_ai_system_resume_watchdog';
 const GEMINI_PROBE_MIN_PERIOD_MIN = 1; // chrome.alarms 최소 1분
 const STEERING_QUEUE_PROBE_MIN_PERIOD_MIN = 1;
+const SYSTEM_RESUME_ALARM_PERIOD_MIN = 1;
+const SYSTEM_RESUME_ALARM_OVERDUE_MS = 20_000;
+const SYSTEM_RESUME_RECOVERY_COOLDOWN_MS = 8_000;
 const STEERING_QUEUE_PROBE_MAX_TABS_PER_TICK = 3;
 const GEMINI_PROBE_NUDGE_COOLDOWN_MS = 30_000; // 너무 자주 탭 전환하면 거슬림
 const CHATGPT_NEW_CHAT_TAB_GAP_MS = 7_000;
@@ -67,7 +71,7 @@ const CHATGPT_NEW_CHAT_PREOPEN_GAP_MS = 450;
 const CHATGPT_RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const CHATGPT_NEW_CHAT_MAX_TABS = 8;
 const READY_AI_CONTENT_VERSION = '2026-06-12.21-single-queue-dispatch';
-const READY_AI_CONTENT_BUILD_VERSION = '2026-08-10.2-gemini-quill-replace';
+const READY_AI_CONTENT_BUILD_VERSION = '2026-08-12.1-sleep-resume-recovery';
 const READY_AI_CANONICAL_EXTENSION_ID = 'jmgnmeaiahlpbbgnocmognokfecofkma';
 const READY_AI_LEGACY_MIRROR_EXTENSION_ID = 'ajnolilmicdilijebljgchoodgajnfeg';
 const OFFSCREEN_DOCUMENT_PATH = 'src/offscreen.html';
@@ -104,7 +108,10 @@ function isManifestManagedContentUrl(url) {
   }
 }
 function shouldRecoverManifestManagedContent(tab, response, options = {}) {
-  if (response?.ok) return false;
+  // A listener from an older extension build can still answer ping even though its
+  // timers/UI are stale after an extension reload or system resume. The caller has
+  // already ruled out the current build before enabling version-mismatch recovery.
+  if (response?.ok && options.recoverVersionMismatch !== true) return false;
   if (options.forceInject === true) return true;
   return String(tab?.status || '').toLowerCase() === 'complete';
 }
@@ -171,6 +178,8 @@ let tabMetaCache = {}; // { [tabId]: { id, title, url, active, discarded, window
 let tabCacheInitialized = false;
 let actionStateCache = {}; // { [tabId]: signature }
 let titleRecoveryAttemptAt = {}; // { [tabId]: timestamp }
+let systemResumeRecoveryPromise = null;
+let systemResumeRecoveryAt = 0;
 let dashboardVersion = 1;
 let customTabTitles = {};
 let customTabTitlesFlushTimer = null;
@@ -1333,7 +1342,7 @@ async function ensureContentScripts(tab, options = {}) {
         return true;
       }
     }
-    if (!shouldRecoverManifestManagedContent(tab, alive, options)) return false;
+    if (!shouldRecoverManifestManagedContent(tab, alive, { ...options, recoverVersionMismatch: true })) return false;
   }
   // 2) 없으면 강제 주입(필요 권한: "scripting")
   let injected = await pScriptingExec(tabId, CONTENT_SCRIPT_FILES, injectAllFrames);
@@ -2278,6 +2287,20 @@ function ensureGeminiProbeAlarm() {
     chrome.alarms.create(GEMINI_PROBE_ALARM, { periodInMinutes: periodMin });
   } catch (_) {}
 }
+function isSystemResumeAlarmOverdue(alarm, now = Date.now()) {
+  const scheduledTime = Number(alarm?.scheduledTime);
+  if (!Number.isFinite(scheduledTime) || scheduledTime <= 0) return false;
+  return Number(now) - scheduledTime >= SYSTEM_RESUME_ALARM_OVERDUE_MS;
+}
+function ensureSystemResumeAlarm() {
+  if (isReadyAiPassiveDuplicateBackground()) {
+    try { chrome.alarms.clear(SYSTEM_RESUME_ALARM); } catch (_) {}
+    return;
+  }
+  try {
+    chrome.alarms.create(SYSTEM_RESUME_ALARM, { periodInMinutes: SYSTEM_RESUME_ALARM_PERIOD_MIN });
+  } catch (_) {}
+}
 // 초기 설정 로드
 chrome.storage.local.get([
   STORAGE_KEYS.DND_MODE,
@@ -2311,6 +2334,7 @@ chrome.storage.local.get([
   if (isReadyAiPassiveDuplicateBackground()) {
     try { chrome.alarms.clear(GEMINI_PROBE_ALARM); } catch (_) {}
     try { chrome.alarms.clear(STEERING_QUEUE_PROBE_ALARM); } catch (_) {}
+    try { chrome.alarms.clear(SYSTEM_RESUME_ALARM); } catch (_) {}
     return;
   }
   if (typeof res[STORAGE_KEYS.DND_MODE] === 'boolean') settings.dndMode = res[STORAGE_KEYS.DND_MODE];
@@ -2582,6 +2606,10 @@ try {
     }
     if (alarm.name === STEERING_QUEUE_PROBE_ALARM) {
       safeActionCall(tickSteeringQueueProbe());
+      return;
+    }
+    if (alarm.name === SYSTEM_RESUME_ALARM && isSystemResumeAlarmOverdue(alarm)) {
+      safeActionCall(recoverPrimaryAiTabsAfterWake('alarm_overdue'));
     }
   });
 } catch (_) {}
@@ -2788,6 +2816,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!sender.tab) return;
   const tabId = sender.tab.id;
   const frameId = typeof sender.frameId === 'number' ? sender.frameId : 0;
+  if (message.action === 'system_resume_detected') {
+    const tabUrl = sender.tab?.url || sender.url || '';
+    if (frameId !== 0 || (!isChatGptUrl(tabUrl) && !isGoogleAiUrl(tabUrl))) {
+      sendResponse({ ok: false, message: 'not a supported top-frame AI tab' });
+      return;
+    }
+    safeActionCall(recoverPrimaryAiTabsAfterWake(message.reason || 'content_timer_gap'));
+    sendResponse({ ok: true });
+    return;
+  }
   if (message.action === 'ensure_content_for_current_chatgpt_tab') {
     if (isReadyAiPassiveDuplicateBackground()) {
       sendResponse({ ok: false, passive: true });
@@ -3279,6 +3317,58 @@ function purgeDisabledTabs() {
     if (removedAny) ensureSteeringQueueProbeAlarm();
   });
 }
+function pRefreshSiteConfig() {
+  return new Promise((resolve) => getSiteConfig(() => resolve()));
+}
+async function recoverPrimaryAiTabsAfterWake(reason = 'system_resume', options = {}) {
+  if (isReadyAiPassiveDuplicateBackground()) return { ok: false, passive: true };
+  if (systemResumeRecoveryPromise) return systemResumeRecoveryPromise;
+  const now = Date.now();
+  if (options.force !== true && now - systemResumeRecoveryAt < SYSTEM_RESUME_RECOVERY_COOLDOWN_MS) {
+    return { ok: true, skipped: true, reason: 'cooldown' };
+  }
+  systemResumeRecoveryAt = now;
+  systemResumeRecoveryPromise = (async () => {
+    await pRefreshSiteConfig();
+    const tabs = await pTabsQuery({});
+    const candidates = tabs.filter((tab) => {
+      if (!tab || typeof tab.id !== 'number' || tab.discarded) return false;
+      if (String(tab.status || '').toLowerCase() !== 'complete') return false;
+      const url = tab.url || '';
+      return isChatGptUrl(url) || isGoogleAiUrl(url);
+    });
+    const results = await Promise.all(candidates.map(async (tab) => {
+      try {
+        const ready = await ensureContentScripts(tab, {
+          allFrames: false,
+          topFrameOnly: true,
+          frameId: 0,
+        });
+        if (ready) {
+          await pTabsSendMessage(tab.id, {
+            action: 'force_check',
+            reason: reason || 'system_resume',
+            topFrameOnly: true,
+          }, { frameId: 0 });
+        }
+        return !!ready;
+      } catch (_) {
+        return false;
+      }
+    }));
+    return {
+      ok: true,
+      checked: candidates.length,
+      recovered: results.filter(Boolean).length,
+      reason: reason || 'system_resume',
+    };
+  })();
+  try {
+    return await systemResumeRecoveryPromise;
+  } finally {
+    systemResumeRecoveryPromise = null;
+  }
+}
 async function kickActivePrimaryAiTabs(reason) {
   if (isReadyAiPassiveDuplicateBackground()) return;
   getSiteConfig(async () => {
@@ -3313,12 +3403,19 @@ async function kickActivePrimaryAiTabs(reason) {
 }
 try {
   chrome.runtime.onStartup.addListener(() => {
-    safeActionCall(kickActivePrimaryAiTabs('onStartup'));
+    safeActionCall(recoverPrimaryAiTabsAfterWake('onStartup', { force: true }));
   });
 } catch (_) {}
 try {
   chrome.runtime.onInstalled.addListener(() => {
-    safeActionCall(kickActivePrimaryAiTabs('onInstalled'));
+    safeActionCall(recoverPrimaryAiTabsAfterWake('onInstalled', { force: true }));
   });
 } catch (_) {}
+try {
+  chrome.idle.setDetectionInterval(60);
+  chrome.idle.onStateChanged.addListener((state) => {
+    if (state === 'active') safeActionCall(recoverPrimaryAiTabsAfterWake('idle_active'));
+  });
+} catch (_) {}
+ensureSystemResumeAlarm();
 safeActionCall(kickActivePrimaryAiTabs('sw_init_active'));
