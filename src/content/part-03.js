@@ -632,9 +632,9 @@ function positionSteeringUi(force = false) {
       const siteKey = getSiteKey();
       const anchorRight = Math.round(window.innerWidth - rect.right);
       const isChatGpt = siteKey === 'chatgpt';
-      const usesViewportRightDock = siteKey === 'gemini' || siteKey === 'aistudio';
-      const right = usesViewportRightDock
-        ? Math.max(12, Math.min(120, anchorRight))
+      const viewportRightDock = siteKey === 'gemini' ? 24 : (siteKey === 'aistudio' ? 120 : null);
+      const right = viewportRightDock != null
+        ? Math.max(12, Math.min(viewportRightDock, anchorRight))
         : Math.max(12 + (isChatGpt ? 12 : 0), anchorRight - (isChatGpt ? 250 : 0) + (isChatGpt ? 12 : 0));
       const stableBottom = getSteeringStableBottom(siteKey);
       const bottom = stableBottom == null

@@ -107,10 +107,10 @@ assert.deepEqual(
 const background = fs.readFileSync(path.join(root, 'src', 'background.js'), 'utf8');
 const content = fs.readFileSync(path.join(root, 'src', 'content', 'part-02.js'), 'utf8');
 const popup = fs.readFileSync(path.join(root, 'src', 'popup.html'), 'utf8');
-assert.match(background, /2026-08-16\.3-aistudio-right-alignment/);
-assert.match(content, /2026-08-16\.3-aistudio-right-alignment/);
-assert.match(popup, /Ready_Ai 0\.3\.9 · 2026-08-16\.3/);
-assert.match(popup, /version-pill">0\.3\.9 · 2026-08-16\.3</);
+assert.match(background, /2026-08-16\.4-gemini-viewport-right/);
+assert.match(content, /2026-08-16\.4-gemini-viewport-right/);
+assert.match(popup, /Ready_Ai 0\.3\.9 · 2026-08-16\.4/);
+assert.match(popup, /version-pill">0\.3\.9 · 2026-08-16\.4</);
 assert.match(background, /stage: 'composer_busy'/);
 assert.match(background, /document\.execCommand\('selectAll', false, null\)/);
 assert.match(background, /inputType: 'insertReplacementText'/);

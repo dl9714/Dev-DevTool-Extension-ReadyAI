@@ -80,7 +80,7 @@ assert.equal(positionContext.getSteeringStableBottom('chatgpt'), 122, 'ChatGPT r
 assert.equal(positionContext.getSteeringStableBottom('aistudio'), null, 'AI Studio retains composer-relative vertical positioning');
 
 positionContext.position(true);
-assert.equal(positionContext.steeringHost.style.right, '120px', '1920px Gemini matches the measured ChatGPT viewport-right dock');
+assert.equal(positionContext.steeringHost.style.right, '24px', '1920px Gemini sits to the right of the conversation composer');
 assert.equal(positionContext.steeringHost.style.bottom, '111px', 'Gemini launcher starts at the same lower dock used during a conversation');
 
 anchorRect = { right: 1316, top: 395.5 };
@@ -93,9 +93,9 @@ assert.equal(sizeVarApplyCount, sizeVarApplyCountBeforeRepeat, 'unchanged repeat
 
 for (const scenario of [
   { width: 360, height: 420, right: 348, top: 190, expectedRight: 12 },
-  { width: 1024, height: 640, right: 890, top: 280, expectedRight: 120 },
-  { width: 1366, height: 768, right: 1100, top: 650, expectedRight: 120 },
-  { width: 2560, height: 1440, right: 1880, top: 1260, expectedRight: 120 },
+  { width: 1024, height: 640, right: 890, top: 280, expectedRight: 24 },
+  { width: 1366, height: 768, right: 1100, top: 650, expectedRight: 24 },
+  { width: 2560, height: 1440, right: 1880, top: 1260, expectedRight: 24 },
 ]) {
   positionContext.window.innerWidth = scenario.width;
   positionContext.window.innerHeight = scenario.height;
@@ -126,7 +126,7 @@ assert.match(positionContext.steeringLastPositionSignature, /\|fallback\|/, 'Gem
 
 positionContext.getSteeringAnchorElement = () => ({ getBoundingClientRect: () => anchorRect });
 assert.equal(positionContext.refreshFallbackSteeringPosition(), true, 'Gemini retries horizontal anchoring after the composer mounts');
-assert.equal(positionContext.steeringHost.style.right, '120px', 'Gemini resolves to the ChatGPT-style viewport-right dock without a click');
+assert.equal(positionContext.steeringHost.style.right, '24px', 'Gemini resolves to its viewport-right dock without a click');
 assert.equal(positionContext.steeringHost.style.bottom, '111px', 'Gemini remains at the lower dock after resolving its composer');
 
 positionSiteKey = 'chatgpt';
@@ -142,7 +142,7 @@ positionSiteKey = 'aistudio';
 anchorRect = { right: 1200, top: 730 };
 positionContext.steeringLastPositionSignature = '';
 positionContext.position(true);
-assert.equal(positionContext.steeringHost.style.right, '120px', 'AI Studio uses the same viewport-right dock as Gemini');
+assert.equal(positionContext.steeringHost.style.right, '120px', 'AI Studio keeps its existing viewport-right dock');
 
 anchorRect = { right: 1395, top: 750 };
 positionContext.steeringLastPositionSignature = '';
