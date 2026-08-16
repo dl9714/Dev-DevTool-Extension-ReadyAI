@@ -860,6 +860,24 @@ function submitSteeringInputToNewChats() {
   }
   return true;
 }
+function refreshSteeringGeneratingStateBeforeQueueSubmit() {
+  let generatingNow = !!isGenerating;
+  try {
+    maybeRescanShadowRoots();
+    generatingNow = !!(activeSite && detectGenerating(activeSite));
+  } catch (_) {}
+  if (!generatingNow) return false;
+  clearSteeringAutoSendTimer();
+  isGenerating = true;
+  completionStatus = 'idle';
+  steeringLastCompletionAt = 0;
+  markSteeringGenerationObserved();
+  armSteeringTurnCompletionWatchdog(getSteeringTurnWatchdogDelayMs());
+  ensurePolling(true);
+  scheduleCheck(true);
+  updateTitleBadge();
+  return true;
+}
 function submitSteeringInput() {
   const refs = ensureSteeringUi();
   const text = String(refs?.input?.value || '').trim();
@@ -880,11 +898,12 @@ function submitSteeringInput() {
     getSiteKey() === 'chatgpt'
     && !hasChatGptConversationTurns()
   );
+  const generatingNow = refreshSteeringGeneratingStateBeforeQueueSubmit();
   enqueueSteeringPrompt(text, { files, holdForFirstChatGptTurn });
   setSteeringDraftText('');
   try { refs.input.value = ''; } catch (_) {}
   clearSteeringDraftAttachments();
-  const canSendNow = !holdForFirstChatGptTurn && canAutoSendSteeringNow();
+  const canSendNow = !holdForFirstChatGptTurn && !generatingNow && canAutoSendSteeringNow();
   setSteeringStatus(
     holdForFirstChatGptTurn
       ? `${getSteeringQueueCountLabel()} · 첫 질문 전에는 Enter 입력을 전송하지 않습니다.`

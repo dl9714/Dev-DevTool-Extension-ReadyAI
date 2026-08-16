@@ -17,10 +17,12 @@ const context = {};
 vm.createContext(context);
 vm.runInContext(
   `${extractFunction(part10, 'getSteeringComposerEnterMode')}\n`
+    + `${extractFunction(part10, 'getSteeringComposerKeyboardPlan')}\n`
     + `${extractFunction(part07, 'getVisibleChatGptStopButton')}\n`
     + `${extractFunction(part07, 'waitForChatGptUserTurnText')}\n`
     + `${extractFunction(part07, 'sendChatGptImmediateViaStableControls')}\n`
     + 'this.enterMode = getSteeringComposerEnterMode;\n'
+    + 'this.keyboardPlan = getSteeringComposerKeyboardPlan;\n'
     + 'this.stableImmediate = sendChatGptImmediateViaStableControls;',
   context
 );
@@ -31,6 +33,29 @@ function makeRandom(seed) {
     value = (Math.imul(value, 1664525) + 1013904223) >>> 0;
     return value / 0x100000000;
   };
+}
+
+function runGeminiEnterPlanStress(iterations = 25000) {
+  const random = makeRandom(0x6e746572);
+  for (let index = 0; index < iterations; index += 1) {
+    const firstAt = 1000 + (index * 1000);
+    const first = context.keyboardPlan({ key: 'Enter' }, { now: firstAt, lastPlainEnterAt: 0 });
+    assert.equal(first.mode, 'queue', `Gemini first Enter queues ${index}`);
+    assert.equal(first.delayMs, 300, `Gemini first Enter keeps the double-enter window ${index}`);
+    const interval = Math.floor(random() * 701);
+    const second = context.keyboardPlan({ key: 'Enter' }, {
+      now: firstAt + interval,
+      lastPlainEnterAt: firstAt,
+    });
+    const expectedSecond = interval <= 300 ? 'immediate' : 'queue';
+    assert.equal(second.mode, expectedSecond, `Gemini second Enter route ${index}:${interval}`);
+    assert.equal(second.doubleEnter, interval <= 300, `Gemini double-enter flag ${index}:${interval}`);
+    const reset = context.keyboardPlan({ key: 'Enter' }, {
+      now: firstAt + interval + 1,
+      lastPlainEnterAt: 0,
+    });
+    assert.equal(reset.mode, 'queue', `Gemini completed double Enter never poisons the next single Enter ${index}`);
+  }
 }
 
 function runKeySequenceStress(iterations = 50000) {
@@ -117,6 +142,7 @@ async function main() {
   const heapBefore = process.memoryUsage().heapUsed;
   const startedAt = Date.now();
   runKeySequenceStress(50000);
+  runGeminiEnterPlanStress(25000);
   for (let index = 0; index < 350; index += 1) {
     await runStableControlScenario(index);
   }
@@ -126,6 +152,7 @@ async function main() {
   assert.ok(heapGrowthMb < 8, `stress test retained too much heap: ${heapGrowthMb.toFixed(2)}MB`);
   console.log(JSON.stringify({
     keySequences: 50000,
+    geminiEnterPlans: 25000,
     stableControlScenarios: 350,
     heapGrowthMb: Number(heapGrowthMb.toFixed(2)),
     elapsedMs: Date.now() - startedAt,
