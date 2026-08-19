@@ -107,10 +107,10 @@ assert.deepEqual(
 const background = fs.readFileSync(path.join(root, 'src', 'background.js'), 'utf8');
 const content = fs.readFileSync(path.join(root, 'src', 'content', 'part-02.js'), 'utf8');
 const popup = fs.readFileSync(path.join(root, 'src', 'popup.html'), 'utf8');
-assert.match(background, /2026-08-16\.4-gemini-viewport-right/);
-assert.match(content, /2026-08-16\.4-gemini-viewport-right/);
-assert.match(popup, /Ready_Ai 0\.3\.9 · 2026-08-16\.4/);
-assert.match(popup, /version-pill">0\.3\.9 · 2026-08-16\.4</);
+assert.match(background, /2026-08-20\.3-platform-tabs/);
+assert.match(content, /2026-08-20\.3-platform-tabs/);
+assert.match(popup, /Ready_Ai 0\.3\.9 · 2026-08-20\.3/);
+assert.match(popup, /version-pill">0\.3\.9 · 2026-08-20\.3</);
 assert.match(background, /stage: 'composer_busy'/);
 assert.match(background, /document\.execCommand\('selectAll', false, null\)/);
 assert.match(background, /inputType: 'insertReplacementText'/);
@@ -179,6 +179,7 @@ assert.equal(geminiQueueContext.isGenerating, true, 'live Gemini generation refr
 vm.runInContext(
   `${extractSimpleFunction(part07, 'getVisibleChatGptStopButton')}\n`
     + `${extractSimpleFunction(part07, 'waitForChatGptUserTurnText')}\n`
+    + `${extractSimpleFunction(part07, 'waitForChatGptComposerSubmissionStart')}\n`
     + `${extractSimpleFunction(part07, 'sendChatGptImmediateViaStableControls')}\n`
     + 'this.stableImmediate = sendChatGptImmediateViaStableControls;',
   context
@@ -204,6 +205,7 @@ async function runStableImmediateCases() {
   context.findNearbySendButton = () => null;
   context.requestSubmitComposer = () => false;
   context.dispatchSubmitKey = () => false;
+  context.detectChatGptGeneratingLight = () => false;
 
   const interrupted = await context.stableImmediate(composer, 'CTRL_OK', 3000);
   assert.equal(interrupted.ok, true, 'Ctrl+Enter interrupts an active response and sends');

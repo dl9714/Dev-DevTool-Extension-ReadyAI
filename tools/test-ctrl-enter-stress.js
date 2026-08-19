@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const root = path.resolve(__dirname, '..');
 const part07 = fs.readFileSync(path.join(root, 'src', 'content', 'part-07.js'), 'utf8');
 const part10 = fs.readFileSync(path.join(root, 'src', 'content', 'part-10.js'), 'utf8');
+const part11 = fs.readFileSync(path.join(root, 'src', 'content', 'part-11.js'), 'utf8');
 
 function extractFunction(source, name) {
   const match = source.match(new RegExp(`(?:async\\s+)?function ${name}\\([^]*?\\n\\}`));
@@ -20,9 +21,12 @@ vm.runInContext(
     + `${extractFunction(part10, 'getSteeringComposerKeyboardPlan')}\n`
     + `${extractFunction(part07, 'getVisibleChatGptStopButton')}\n`
     + `${extractFunction(part07, 'waitForChatGptUserTurnText')}\n`
+    + `${extractFunction(part07, 'waitForChatGptComposerSubmissionStart')}\n`
     + `${extractFunction(part07, 'sendChatGptImmediateViaStableControls')}\n`
+    + `${extractFunction(part11, 'getChatGptNativeComposerEnterPlan')}\n`
     + 'this.enterMode = getSteeringComposerEnterMode;\n'
     + 'this.keyboardPlan = getSteeringComposerKeyboardPlan;\n'
+    + 'this.nativeEnterPlan = getChatGptNativeComposerEnterPlan;\n'
     + 'this.stableImmediate = sendChatGptImmediateViaStableControls;',
   context
 );
@@ -75,6 +79,41 @@ function runKeySequenceStress(iterations = 50000) {
   }
 }
 
+function runCtrlEnterFollowupHandoffStress(iterations = 50000) {
+  const random = makeRandom(0xc071e73e);
+  for (let index = 0; index < iterations; index += 1) {
+    const ctrlEvent = random() < 0.5
+      ? { key: 'Enter', ctrlKey: true }
+      : { key: 'Enter', metaKey: true };
+    const generating = random() < 0.5;
+    const immediate = context.nativeEnterPlan(ctrlEvent, {
+      monitoring: true,
+      steeringEnabled: true,
+      generating,
+      awaitingImmediateResponse: false,
+    });
+    assert.equal(immediate.mode, 'native_fallback', `immediate shortcut remains native-first ${index}`);
+    assert.equal(immediate.interruptExistingGeneration, generating, `interrupt state follows generation ${index}`);
+
+    const followupDelayMs = Math.floor(random() * 6501);
+    const followup = context.nativeEnterPlan({ key: 'Enter' }, {
+      monitoring: true,
+      steeringEnabled: true,
+      generating: false,
+      awaitingImmediateResponse: followupDelayMs <= 6500,
+    });
+    assert.equal(followup.mode, 'queue', `follow-up Enter is captured across the handoff window ${index}:${followupDelayMs}`);
+
+    const settled = context.nativeEnterPlan({ key: 'Enter' }, {
+      monitoring: true,
+      steeringEnabled: true,
+      generating: false,
+      awaitingImmediateResponse: false,
+    });
+    assert.equal(settled.mode, 'ignore', `idle Enter returns to ChatGPT after settlement ${index}`);
+  }
+}
+
 async function runStableControlScenario(index) {
   const kind = index % 7;
   let clock = 0;
@@ -121,6 +160,7 @@ async function runStableControlScenario(index) {
   context.findNearbySendButton = () => null;
   context.requestSubmitComposer = () => false;
   context.dispatchSubmitKey = () => false;
+  context.detectChatGptGeneratingLight = () => false;
 
   const result = await context.stableImmediate(composer, expected, 6200);
   if (kind === 6) {
@@ -129,7 +169,8 @@ async function runStableControlScenario(index) {
     return;
   }
   assert.equal(result.ok, true, `stable controls eventually send ${index}`);
-  assert.equal(userTurnCount, 1, `exactly one user turn is created ${index}`);
+  assert.equal(userTurnCount, kind === 4 ? 0 : 1, `the accepted submission is recognized ${index}`);
+  if (kind === 4) assert.equal(sendClicks, 1, `a cleared image-editor composer is never submitted twice ${index}`);
   if (kind === 0 || kind === 2 || kind === 5) {
     assert.equal(result.route, 'chatgpt_interrupt_then_send', `active response is interrupted ${index}`);
   } else {
@@ -142,6 +183,7 @@ async function main() {
   const heapBefore = process.memoryUsage().heapUsed;
   const startedAt = Date.now();
   runKeySequenceStress(50000);
+  runCtrlEnterFollowupHandoffStress(50000);
   runGeminiEnterPlanStress(25000);
   for (let index = 0; index < 350; index += 1) {
     await runStableControlScenario(index);
@@ -152,6 +194,7 @@ async function main() {
   assert.ok(heapGrowthMb < 8, `stress test retained too much heap: ${heapGrowthMb.toFixed(2)}MB`);
   console.log(JSON.stringify({
     keySequences: 50000,
+    ctrlEnterFollowupHandoffs: 50000,
     geminiEnterPlans: 25000,
     stableControlScenarios: 350,
     heapGrowthMb: Number(heapGrowthMb.toFixed(2)),

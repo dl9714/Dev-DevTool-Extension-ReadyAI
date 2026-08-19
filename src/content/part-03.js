@@ -162,6 +162,11 @@ function isSteeringTurnWatchdogMature() {
   return Date.now() - steeringTurnCompletionWatchdogStartedAt >= getSteeringTurnWatchdogDelayMs();
 }
 function markSteeringGenerationObserved() {
+  try {
+    if (typeof clearChatGptNativeComposerImmediateHandoff === 'function') {
+      clearChatGptNativeComposerImmediateHandoff();
+    }
+  } catch (_) {}
   if (!steeringAwaitingTurnCompletion) return;
   steeringObservedGenerationSinceSend = true;
   clearSteeringAwaitingResponseStart();
@@ -304,6 +309,11 @@ function armSteeringTurnCompletionWatchdog(ms = 0) {
   }, delay);
 }
 function clearSteeringTurnCompletionWait() {
+  try {
+    if (typeof clearChatGptNativeComposerImmediateHandoff === 'function') {
+      clearChatGptNativeComposerImmediateHandoff();
+    }
+  } catch (_) {}
   steeringAwaitingTurnCompletion = false;
   steeringObservedGenerationSinceSend = false;
   clearSteeringChatGptAssistantObservation();

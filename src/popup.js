@@ -139,6 +139,272 @@ function truncateText(value, max = 80) {
   if (!text) return '';
   return text.length > max ? `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…` : text;
 }
+function formatVerificationPlanCount(value) {
+  const count = Math.max(0, Number(value) || 0);
+  if (count >= 10000 && count % 10000 === 0) return `${count / 10000}만`;
+  if (count >= 10000) return `${(count / 10000).toFixed(1)}만`;
+  return String(count);
+}
+function getVerificationUiModel(data = {}) {
+  const groups = Array.isArray(data.groups) ? data.groups.filter(Boolean) : [];
+  const manualChecks = Array.isArray(data.manualChecks) ? data.manualChecks.filter(Boolean) : [];
+  const categories = Array.isArray(data.categories) ? data.categories.filter(Boolean) : [];
+  const passedGroups = groups.filter((group) => group.status === 'passed').length;
+  const passedManualChecks = manualChecks.filter((check) => check.status === 'passed').length;
+  const scheduledManualChecks = manualChecks.filter((check) => check.status === 'scheduled').length;
+  const platformDefinitions = Array.isArray(data.platforms) ? data.platforms.filter(Boolean) : [];
+  const platforms = platformDefinitions.map((platform) => {
+    const platformGroups = groups.filter((group) => Array.isArray(group.platforms) && group.platforms.includes(platform.id));
+    const platformManualChecks = manualChecks.filter((check) => check.platform === platform.id);
+    const groupCategories = categories
+      .map((category) => ({ ...category, items: platformGroups.filter((group) => group.category === category.id) }))
+      .filter((category) => category.items.length > 0);
+    const manualCategories = categories
+      .map((category) => ({ ...category, items: platformManualChecks.filter((check) => check.category === category.id) }))
+      .filter((category) => category.items.length > 0);
+    return {
+      ...platform,
+      groups: platformGroups,
+      manualChecks: platformManualChecks,
+      groupCategories,
+      manualCategories,
+    };
+  });
+  const automatedPassed = data?.automated?.status === 'passed' && groups.length > 0 && passedGroups === groups.length;
+  const liveWebPassed = data?.liveWeb?.status === 'passed' && manualChecks.length > 0 && passedManualChecks === manualChecks.length;
+  const progress = groups.length ? Math.round((passedGroups / groups.length) * 100) : 0;
+  return {
+    suiteVersion: String(data.suiteVersion || '0.0.0'),
+    appVersion: String(data.appVersion || '확인 필요'),
+    completedAt: String(data.completedAt || ''),
+    groups,
+    manualChecks,
+    categories,
+    platforms,
+    passedGroups,
+    passedManualChecks,
+    scheduledManualChecks,
+    automatedPassed,
+    liveWebPassed,
+    liveWebStatus: String(data?.liveWeb?.status || 'scheduled'),
+    progress,
+    repeatRounds: Math.max(0, Number(data?.automated?.repeatRounds) || 0),
+    randomizedPlansLabel: formatVerificationPlanCount(data?.automated?.randomizedPlansPerRound),
+    automatedSummary: String(data?.automated?.summary || ''),
+    liveWebSummary: String(data?.liveWeb?.summary || ''),
+    liveWebNote: String(data?.liveWeb?.note || ''),
+  };
+}
+function setVerificationText(id, value) {
+  const el = $(id);
+  if (el) el.textContent = String(value ?? '');
+}
+function resetVerificationList(container) {
+  if (!container) return;
+  if (typeof container.replaceChildren === 'function') container.replaceChildren();
+  else container.textContent = '';
+}
+function appendVerificationResultRow(container, item, options = {}) {
+  if (!container || !item) return;
+  const passed = item.status === 'passed';
+  const scheduled = item.status === 'scheduled';
+  const row = document.createElement('div');
+  row.className = options.manual ? 'verification-manual-row' : 'verification-group-row';
+  const icon = document.createElement('img');
+  icon.src = passed ? '../assets/icons/status-complete.svg' : '../assets/icons/status-queue.svg';
+  icon.alt = '';
+  const copy = document.createElement('span');
+  copy.className = 'verification-row-copy';
+  const title = document.createElement('strong');
+  title.textContent = options.manual
+    ? `${item.id} · ${item.name}`
+    : `${item.name} · 항목 V${item.version}`;
+  const passVersion = document.createElement('span');
+  passVersion.className = `verification-pass-version${passed ? '' : ' pending'}`;
+  const passedDate = /^\d{4}-\d{2}-\d{2}$/.test(String(item.passedAt || ''))
+    ? ` · ${String(item.passedAt).slice(5).replace('-', '.')}`
+    : '';
+  passVersion.textContent = passed
+    ? `통과 앱 버전 · ${item.passedInAppVersion || '기록 없음'}${passedDate}`
+    : '통과 앱 버전 · 아직 없음';
+  const meta = document.createElement('span');
+  if (options.manual) {
+    const delayText = Array.isArray(item.delaysMs) && item.delaysMs.length
+      ? ` · ${item.delaysMs.join('/')}ms`
+      : '';
+    meta.textContent = item.evidence || `해당 플랫폼 실웹에서 확인${delayText}`;
+  } else {
+    meta.textContent = `${item.id} · ${item.evidence || item.summary || '자동 검증'}`;
+    if (item.summary) title.title = item.summary;
+  }
+  copy.appendChild(title);
+  copy.appendChild(passVersion);
+  copy.appendChild(meta);
+  const status = document.createElement('span');
+  status.className = `verification-result-pill${passed ? '' : ' pending'}`;
+  status.textContent = passed ? '통과' : (scheduled ? '변동 시' : '대기');
+  row.appendChild(icon);
+  row.appendChild(copy);
+  row.appendChild(status);
+  container.appendChild(row);
+}
+function appendVerificationPlatformSection(container, platform, items, options = {}) {
+  if (!container || !platform || !Array.isArray(items) || !items.length) return;
+  const section = document.createElement('section');
+  section.className = 'verification-platform-section';
+  section.dataset.platform = String(platform.id || '');
+  const head = document.createElement('div');
+  head.className = 'verification-platform-head';
+  const title = document.createElement('strong');
+  const platformLabel = String(platform.label || platform.id || '');
+  const platformName = String(platform.name || platformLabel);
+  title.textContent = platformLabel === platformName ? platformName : `${platformLabel} · ${platformName}`;
+  const count = document.createElement('span');
+  const passedCount = items.filter((item) => item.status === 'passed').length;
+  count.textContent = options.manual ? `${passedCount}/${items.length} 기준선` : `${passedCount}/${items.length} 통과`;
+  const rows = document.createElement('div');
+  rows.className = 'verification-platform-rows';
+  const categoryGroups = Array.isArray(options.categories) ? options.categories.filter((category) => category?.items?.length) : [];
+  if (categoryGroups.length) {
+    categoryGroups.forEach((category, index) => {
+      const details = document.createElement('details');
+      details.className = 'verification-category';
+      details.dataset.category = String(category.id || '');
+      details.open = index === 0;
+      const summary = document.createElement('summary');
+      summary.className = 'verification-category-summary';
+      const categoryCopy = document.createElement('span');
+      categoryCopy.className = 'verification-category-copy';
+      const categoryTitle = document.createElement('strong');
+      categoryTitle.textContent = String(category.label || category.id || '기타');
+      const categoryDescription = document.createElement('span');
+      categoryDescription.textContent = String(category.description || '관련 검증 항목');
+      const categoryCount = document.createElement('span');
+      categoryCount.className = 'verification-category-count';
+      const categoryPassed = category.items.filter((item) => item.status === 'passed').length;
+      categoryCount.textContent = options.manual
+        ? (categoryPassed ? `${categoryPassed}/${category.items.length} 기준선` : `${category.items.length}개 · 변동 시`)
+        : `${categoryPassed}/${category.items.length} 통과`;
+      categoryCopy.appendChild(categoryTitle);
+      categoryCopy.appendChild(categoryDescription);
+      summary.appendChild(categoryCopy);
+      summary.appendChild(categoryCount);
+      const categoryRows = document.createElement('div');
+      categoryRows.className = 'verification-category-rows';
+      category.items.forEach((item) => appendVerificationResultRow(categoryRows, item, options));
+      details.appendChild(summary);
+      details.appendChild(categoryRows);
+      rows.appendChild(details);
+    });
+  } else {
+    items.forEach((item) => appendVerificationResultRow(rows, item, options));
+  }
+  head.appendChild(title);
+  head.appendChild(count);
+  section.appendChild(head);
+  section.appendChild(rows);
+  container.appendChild(section);
+}
+function activateVerificationPlatform(model, platformId) {
+  const platform = model?.platforms?.find((item) => item.id === platformId) || model?.platforms?.[0];
+  if (!platform) return;
+  document.querySelectorAll('[data-verification-platform-tab]').forEach((button) => {
+    const active = button.dataset.verificationPlatformTab === platform.id;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+    button.tabIndex = active ? 0 : -1;
+  });
+  document.querySelectorAll('#verification-group-list .verification-platform-section, #verification-manual-list .verification-platform-section').forEach((section) => {
+    section.hidden = section.dataset.platform !== platform.id;
+  });
+  const manualPassed = platform.manualChecks.filter((item) => item.status === 'passed').length;
+  setVerificationText('verification-group-heading', `${platform.label} 자동 검증`);
+  setVerificationText('verification-group-count-label', `${platform.groups.length}개 · 카테고리 ${platform.groupCategories.length}`);
+  setVerificationText('verification-manual-heading', `${platform.label} 실웹 확인`);
+  setVerificationText('verification-manual-count-label', `${manualPassed}/${platform.manualChecks.length} 기준선 · 카테고리 ${platform.manualCategories.length}`);
+}
+function renderVerificationPlatformTabs(container, model) {
+  if (!container || !Array.isArray(model?.platforms)) return;
+  const previousPlatformId = container.querySelector('.verification-platform-tab.active')?.dataset.verificationPlatformTab || '';
+  resetVerificationList(container);
+  model.platforms.forEach((platform) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'verification-platform-tab';
+    button.dataset.verificationPlatformTab = String(platform.id || '');
+    button.setAttribute('role', 'tab');
+    const title = document.createElement('strong');
+    title.textContent = String(platform.label || platform.name || platform.id || '');
+    const count = document.createElement('span');
+    const manualPassed = platform.manualChecks.filter((item) => item.status === 'passed').length;
+    count.textContent = `자동 ${platform.groups.length} · 실웹 ${manualPassed}/${platform.manualChecks.length}`;
+    button.appendChild(title);
+    button.appendChild(count);
+    button.addEventListener('click', () => activateVerificationPlatform(model, platform.id));
+    container.appendChild(button);
+  });
+  const initialPlatformId = model.platforms.some((platform) => platform.id === previousPlatformId)
+    ? previousPlatformId
+    : model.platforms[0]?.id;
+  activateVerificationPlatform(model, initialPlatformId);
+}
+function renderVerificationCenter(data) {
+  const model = getVerificationUiModel(data);
+  const progress = $('verification-progress-home');
+  const progressTrack = progress?.parentElement || null;
+  const card = $('verification-card');
+  if (card) card.dataset.status = model.automatedPassed ? 'passed' : 'attention';
+  setVerificationText('verification-card-title', model.automatedPassed ? '자동 안정화 검증 완료' : '자동 검증 확인 필요');
+  setVerificationText('verification-run-summary-home', `앱 ${model.appVersion} · 플랫폼별 빠른 검증 통과`);
+  setVerificationText('verification-suite-version-home', `검증팩 V${model.suiteVersion.replace(/\.0$/, '')}`);
+  setVerificationText('verification-stat-gpt', `${model.platforms.find((platform) => platform.id === 'chatgpt')?.groups.length || 0}개`);
+  setVerificationText('verification-stat-gemini', `${model.platforms.find((platform) => platform.id === 'gemini')?.groups.length || 0}개`);
+  setVerificationText('verification-stat-ais', `${model.platforms.find((platform) => platform.id === 'aistudio')?.groups.length || 0}개`);
+  if (progress) progress.style.width = `${model.progress}%`;
+  if (progressTrack) progressTrack.setAttribute('aria-valuenow', String(model.progress));
+
+  setVerificationText('verification-status-detail', model.automatedPassed ? '자동 검증 완료' : '자동 검증 확인 필요');
+  setVerificationText('verification-version-detail', `검증팩 V${model.suiteVersion} · 앱 ${model.appVersion}`);
+  const dateParts = model.completedAt.split('-').filter(Boolean);
+  const shortDate = dateParts.length === 3 ? `${dateParts[1]}.${dateParts[2]} 완료` : '날짜 확인';
+  setVerificationText('verification-date-detail', shortDate);
+  setVerificationText('verification-groups-detail', String(model.groups.length));
+  setVerificationText('verification-rounds-detail', `${model.repeatRounds}회`);
+  setVerificationText('verification-random-detail', model.randomizedPlansLabel);
+  setVerificationText('verification-live-title', model.liveWebSummary || (model.liveWebPassed ? '플랫폼별 실웹 검증 완료' : '플랫폼별 실웹 검증 예약'));
+  setVerificationText('verification-live-copy', model.liveWebNote || '실제 웹 시나리오 상태를 확인합니다.');
+  const groupList = $('verification-group-list');
+  resetVerificationList(groupList);
+  model.platforms.forEach((platform) => appendVerificationPlatformSection(groupList, platform, platform.groups, {
+    categories: platform.groupCategories,
+  }));
+  const manualList = $('verification-manual-list');
+  resetVerificationList(manualList);
+  model.platforms.forEach((platform) => appendVerificationPlatformSection(manualList, platform, platform.manualChecks, {
+    manual: true,
+    categories: platform.manualCategories,
+  }));
+  renderVerificationPlatformTabs($('verification-platform-tabs'), model);
+  return model;
+}
+async function loadVerificationCenter() {
+  try {
+    const url = typeof chrome !== 'undefined' && chrome.runtime?.getURL
+      ? chrome.runtime.getURL('src/verification-suite.json')
+      : 'verification-suite.json';
+    const response = await fetch(url, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`verification_http_${response.status}`);
+    renderVerificationCenter(await response.json());
+    return true;
+  } catch (_) {
+    setVerificationText('verification-card-title', '검증 정보 확인 필요');
+    setVerificationText('verification-run-summary-home', '검증 데이터 파일을 불러오지 못했습니다.');
+    setVerificationText('verification-stat-gpt', '-');
+    setVerificationText('verification-stat-gemini', '-');
+    setVerificationText('verification-stat-ais', '-');
+    return false;
+  }
+}
 function buildTemplateId() {
   return `tpl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -2911,6 +3177,8 @@ function startDashboardPolling(cfg) {
 document.addEventListener('DOMContentLoaded', () => {
   renderDetectionOptions();
   wireSheetNavigation();
+  void loadVerificationCenter();
+  if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
   loadConfig((cfg) => {
     currentPopupConfig = cfg;
     setHint('');

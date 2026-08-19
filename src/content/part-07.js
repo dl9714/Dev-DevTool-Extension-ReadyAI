@@ -107,7 +107,7 @@ function hasSteeringPendingUploadIndicator(scope) {
 }
 function getSteeringAttachmentUploadState(composer) {
   const scope = getSteeringAttachmentUploadScope(composer);
-  const sendButton = getActiveSendButton() || findNearbySendButton(composer) || findNearbySendButtonAnyState(composer);
+  const sendButton = findNearbySendButton(composer) || findNearbySendButtonAnyState(composer) || getActiveSendButton(composer);
   const sendFound = !!sendButton;
   const sendEnabled = !!(sendButton && isEnabledButtonLike(sendButton));
   const pending = hasSteeringPendingUploadIndicator(scope);
@@ -257,22 +257,53 @@ async function waitForChatGptUserTurnText(text, beforeCount, timeoutMs = 2200) {
   }
   return countRecentChatGptUserTurnText(expected) > beforeCount;
 }
-async function sendChatGptImmediateViaStableControls(composer, text, timeoutMs = 6200) {
+async function waitForChatGptComposerSubmissionStart(composer, text, options = {}) {
+  const expected = String(text || '').trim();
+  const beforeCount = Math.max(0, Number(options.beforeCount) || 0);
+  const sendButton = options.sendButton || null;
+  const wasGenerating = !!options.wasGenerating;
+  const timeoutMs = Math.max(400, Number(options.timeoutMs) || 1900);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    try {
+      if (typeof countRecentChatGptUserTurnText === 'function' && countRecentChatGptUserTurnText(expected) > beforeCount) return true;
+    } catch (_) {}
+    try {
+      if (composer?.isConnected === false) return true;
+      const currentText = String(getCurrentComposerText(composer) || '').trim();
+      if (expected && currentText !== expected) return true;
+    } catch (_) {}
+    try {
+      if (sendButton?.isConnected === false || (sendButton && !isEnabledButtonLike(sendButton))) return true;
+    } catch (_) {}
+    if (!wasGenerating) {
+      try {
+        if (detectChatGptGeneratingLight()) return true;
+      } catch (_) {}
+    }
+    await waitForSteeringTick(70);
+  }
+  return false;
+}
+async function sendChatGptImmediateViaStableControls(composer, text, timeoutMs = 6200, options = {}) {
   const expected = String(text || '').trim();
   if (!composer || !expected) return { ok: false, sent: false, retryable: false };
   const deadline = Date.now() + Math.max(2600, Number(timeoutMs) || 6200);
+  const interruptExistingGeneration = options.interruptExistingGeneration !== false;
   let interrupted = false;
   let submitAttempts = 0;
   while (Date.now() <= deadline) {
     const stopButton = getVisibleChatGptStopButton();
-    if (stopButton) {
+    if (stopButton && interruptExistingGeneration) {
       if (!interrupted && isEnabledButtonLike(stopButton)) {
         try { stopButton.click(); interrupted = true; } catch (_) {}
       }
       await waitForSteeringTick(80);
       continue;
     }
-    const liveComposer = getActiveComposer() || composer;
+    const liveComposer = composer?.isConnected !== false && isVisible(composer)
+      ? composer
+      : (getActiveComposer() || composer);
     const currentText = String(getCurrentComposerText(liveComposer) || '').trim();
     if (currentText !== expected) {
       setControlValue(liveComposer, expected);
@@ -285,7 +316,9 @@ async function sendChatGptImmediateViaStableControls(composer, text, timeoutMs =
     const beforeCount = typeof countRecentChatGptUserTurnText === 'function'
       ? countRecentChatGptUserTurnText(expected)
       : 0;
-    const sendButton = getActiveSendButton() || findNearbySendButton(liveComposer);
+    let wasGenerating = false;
+    try { wasGenerating = !!detectChatGptGeneratingLight(); } catch (_) {}
+    const sendButton = findNearbySendButton(liveComposer) || getActiveSendButton(liveComposer);
     let triggered = false;
     if (sendButton) {
       if (!isEnabledButtonLike(sendButton)) {
@@ -299,7 +332,12 @@ async function sendChatGptImmediateViaStableControls(composer, text, timeoutMs =
     }
     if (triggered) {
       submitAttempts += 1;
-      if (await waitForChatGptUserTurnText(expected, beforeCount, 1900)) {
+      if (await waitForChatGptComposerSubmissionStart(liveComposer, expected, {
+        beforeCount,
+        sendButton,
+        wasGenerating,
+        timeoutMs: 1900,
+      })) {
         return {
           ok: true,
           sent: true,
@@ -312,7 +350,9 @@ async function sendChatGptImmediateViaStableControls(composer, text, timeoutMs =
     }
     await waitForSteeringTick(120);
   }
-  const liveComposer = getActiveComposer() || composer;
+  const liveComposer = composer?.isConnected !== false && isVisible(composer)
+    ? composer
+    : (getActiveComposer() || composer);
   if (String(getCurrentComposerText(liveComposer) || '').trim() !== expected) {
     setControlValue(liveComposer, expected);
     await waitForSteeringComposerText(liveComposer, expected, 700);
@@ -407,7 +447,7 @@ async function sendSteeringPromptText(text, options = {}) {
   }
   const buttonFirstAttempts = [
     () => {
-      const btn = getActiveSendButton();
+      const btn = findNearbySendButton(composer) || getActiveSendButton(composer);
       if (!btn) return false;
       try { btn.click(); return true; } catch (_) { return false; }
     },
