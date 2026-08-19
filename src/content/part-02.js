@@ -340,7 +340,12 @@ function detectChatGptGeneratingLight() {
     : '[data-testid="stop-button"],button[aria-label*="Stop"],button[aria-label*="stop"],button[aria-label*="중지"],button[data-testid*="stop"]';
   let buttons = [];
   try { buttons = Array.from(document.querySelectorAll(selector)).slice(-8); } catch (_) { buttons = []; }
-  return buttons.some((btn) => isVisible(btn) && isEnabledButtonLike(btn));
+  if (buttons.some((btn) => isVisible(btn) && isEnabledButtonLike(btn))) return true;
+  try {
+    return typeof detectChatGPTImageGenerating === 'function' && detectChatGPTImageGenerating();
+  } catch (_) {
+    return false;
+  }
 }
 function sendChatGptLightStatusUpdate() {
   if (!activeSite || !isChatGptSafeMode()) return;
@@ -614,7 +619,7 @@ var STEERING_AUTO_SEND_DELAY_MS = 1000;
 var STEERING_TURN_WATCHDOG_VISIBLE_MS = 12000;
 var STEERING_TURN_WATCHDOG_HIDDEN_MS = 20000;
 var READY_AI_CONTENT_VERSION = '2026-06-12.21-single-queue-dispatch';
-var READY_AI_CONTENT_BUILD_VERSION = '2026-08-10.2-gemini-quill-replace';
+var READY_AI_CONTENT_BUILD_VERSION = '2026-08-20.3-platform-tabs';
 var READY_AI_CANONICAL_EXTENSION_ID = 'jmgnmeaiahlpbbgnocmognokfecofkma';
 var readyAiDuplicateContentInstance = false;
 function getReadyAiExtensionId() {

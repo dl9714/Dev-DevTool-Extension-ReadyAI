@@ -24,6 +24,8 @@ vm.runInContext(
 const cases = [
   ['completed tab with no listener is recovered', { status: 'complete' }, null, {}, true],
   ['completed tab with a responsive listener is not duplicated', { status: 'complete' }, { ok: true }, {}, false],
+  ['completed tab with an older responsive build is replaced', { status: 'complete' }, { ok: true }, { recoverVersionMismatch: true }, true],
+  ['loading tab with an older responsive build waits', { status: 'loading' }, { ok: true }, { recoverVersionMismatch: true }, false],
   ['loading tab waits for manifest document_idle injection', { status: 'loading' }, null, {}, false],
   ['unknown tab state is not injected speculatively', {}, null, {}, false],
   ['an explicit force can recover a non-complete tab', { status: 'loading' }, null, { forceInject: true }, true],
@@ -34,7 +36,7 @@ for (const [label, tab, response, options, expected] of cases) {
   assert.equal(context.shouldRecover(tab, response, options), expected, label);
 }
 
-assert.match(background, /if \(!shouldRecoverManifestManagedContent\(tab, alive, options\)\) return false;/);
+assert.match(background, /recoverVersionMismatch: true/);
 assert.match(background, /return isCurrentBuild\(reinjected\);/);
 assert.match(background, /kickActivePrimaryAiTabs\('sw_init_active'\)/);
 
